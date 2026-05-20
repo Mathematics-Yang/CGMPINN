@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://arxiv.org/abs/2605.19263"><img src="https://img.shields.io/badge/arXiv-2605.19263-b31b1b.svg" alt="arXiv"></a>
+  <a href="https://huggingface.co/papers/2605.19263"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Papers-yellow" alt="Hugging Face"></a>
   <a href="https://github.com/Mathematics-Yang/CGMPINN"><img src="https://img.shields.io/badge/Code-CGMPINN-blue" alt="Code"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.8%2B-green" alt="Python"></a>
   <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-1.x%2F2.x-ee4c2c" alt="PyTorch"></a>
@@ -14,6 +15,7 @@
 CGMPINN 使用高斯混合模型对 PDE 残差分布进行建模，从而估计不同空间区域的学习难度，并通过平滑的课程学习策略，将训练重点从较容易区域逐步转移到较困难区域。该方法也可以与自适应损失平衡方法结合使用。
 
 > **论文：** [arXiv:2605.19263](https://arxiv.org/abs/2605.19263)  
+> **Hugging Face：** [https://huggingface.co/papers/2605.19263](https://huggingface.co/papers/2605.19263)  
 > **代码：** https://github.com/Mathematics-Yang/CGMPINN
 
 ## 摘要

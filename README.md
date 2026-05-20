@@ -2,6 +2,7 @@
 
 <p align="center">
   <a href="https://arxiv.org/abs/2605.19263"><img src="https://img.shields.io/badge/arXiv-2605.19263-b31b1b.svg" alt="arXiv"></a>
+  <a href="https://huggingface.co/papers/2605.19263"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Papers-yellow" alt="Hugging Face"></a>
   <a href="https://github.com/Mathematics-Yang/CGMPINN"><img src="https://img.shields.io/badge/Code-CGMPINN-blue" alt="Code"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.8%2B-green" alt="Python"></a>
   <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-1.x%2F2.x-ee4c2c" alt="PyTorch"></a>
@@ -14,6 +15,7 @@ Official implementation of **Curriculum-Guided Gaussian Mixture Physics-Informed
 CGMPINN uses Gaussian mixture modeling to estimate the spatially varying difficulty of PDE residuals and applies a smooth curriculum schedule that progressively shifts optimization from easier regions to harder regions. The method can also be combined with self-adaptive loss balancing.
 
 > **Paper:** [arXiv:2605.19263](https://arxiv.org/abs/2605.19263)  
+> **Hugging Face:** [https://huggingface.co/papers/2605.19263](https://huggingface.co/papers/2605.19263)  
 > **Code:** https://github.com/Mathematics-Yang/CGMPINN
 
 ## Abstract
