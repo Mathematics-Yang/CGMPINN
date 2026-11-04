@@ -132,6 +132,12 @@ Saved model parameters are provided in the corresponding `*_parameter` directori
 
 These files can be used by the plotting scripts to reproduce visual comparisons without retraining all models.
 
+## Outputs
+
+- Training scripts save the trained Adam→L-BFGS (Tanh) model to the corresponding `*_parameter` directory, overwriting the provided file with the same name.
+- The plotting scripts raise an error if a weight file is missing or does not match the model architecture.
+- All figures are saved as PDF (600 dpi) to `<benchmark>/<benchmark>_picture/`, e.g. `1D_heat/1D_heat_picture/1D_heat_plot_comparison_group_loss.pdf`. The folder is created automatically and is not tracked by git.
+
 ## Citation
 
 If you find this repository useful, please cite our work:

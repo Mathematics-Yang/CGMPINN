@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -7,7 +9,6 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.ticker import FuncFormatter, ScalarFormatter
 from sklearn.mixture import GaussianMixture
-import warnings
 import os
 import sys
 import time
@@ -15,7 +16,26 @@ import string
 from matplotlib.colors import TwoSlopeNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.ndimage import gaussian_filter1d
-warnings.filterwarnings('ignore')
+import re
+
+# Output locations (resolved relative to this script, not the working directory)
+try:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:  # interactive session without __file__
+    SCRIPT_DIR = os.getcwd()
+SCRIPT_NAME = "1D_fisher_kpp_plot"
+PARAMETER_DIR = os.path.join(SCRIPT_DIR, "..", "1D_fisher_kpp_parameter")
+PICTURE_DIR = os.path.join(SCRIPT_DIR, "..", "1D_fisher_kpp_picture")
+
+
+def save_figure(name, fig=None):
+    """Save a figure as a 600-dpi PDF to PICTURE_DIR as <script>_<name>.pdf."""
+    os.makedirs(PICTURE_DIR, exist_ok=True)
+    safe_name = re.sub(r"[^\w.-]+", "_", f"{SCRIPT_NAME}_{name}").strip("_")
+    path = os.path.normpath(os.path.join(PICTURE_DIR, f"{safe_name}.pdf"))
+    (fig if fig is not None else plt.gcf()).savefig(path, format="pdf", dpi=600, bbox_inches="tight")
+    print(f"Figure saved to: {path}")
+
 
 plt.rcParams.update({
     'font.size': 12,
@@ -26,7 +46,7 @@ plt.rcParams.update({
     'ytick.labelsize': 11,
     'legend.fontsize': 10,
     'figure.dpi': 150,
-    'savefig.dpi': 300,
+    'savefig.dpi': 600,
     'savefig.bbox': 'tight'
 })
 
@@ -693,78 +713,53 @@ class CGMPINN(nn.Module):
 
 # General function to load models
 def load_pinn_model(model_class, model_kwargs, weight_path, device='cpu'):
-    """Load saved PINN complete information"""
-    # 1. Check if the path exists
+    """
+    Load a saved PINN (model parameters + loss history + training time).
+
+    Raises an error instead of silently falling back to a randomly initialized
+    model, so that figures are never produced from untrained weights.
+    :param model_class: Model class (e.g., PINN, STAR_PINN, LNN_PINN, etc.)
+    :param model_kwargs: Model initialization parameters (dictionary)
+    :param weight_path: Full path to the weight file (.pth)
+    :param device: Device to load the model on (cpu/cuda)
+    :return: (Loaded model, auxiliary information dictionary)
+    """
     if not os.path.exists(weight_path):
-        print(f"❌ Weight file not found: {weight_path}")
-        # Create mock data for demonstration
-        model = model_class(**model_kwargs)
-        model = model.to(device)
-        model.eval()
-        aux_info = {
-            'loss_history': [],
-            'training_time': 0.0,
-            'final_total_loss': float('inf')
-        }
-        return model, aux_info
-    
-    # 2. Try to load the complete custom dictionary
-    try:
-        loaded_data = torch.load(weight_path, map_location=device, weights_only=False)
-    except Exception as e:
-        print(f"⚠️ Failed to load file: {e}, using randomly initialized model for demonstration")
-        model = model_class(**model_kwargs)
-        model = model.to(device)
-        model.eval()
-        aux_info = {
-            'loss_history': [],
-            'training_time': 0.0,
-            'final_total_loss': float('inf')
-        }
-        return model, aux_info
-    
-    # 3. Create an empty model
+        raise FileNotFoundError(f"Weight file not found: {weight_path}")
+
+    loaded_data = torch.load(weight_path, map_location=device, weights_only=False)
+
     model = model_class(**model_kwargs)
     model = model.to(device)
-    
-    # 4. Extract and load model parameters
-    try:
-        if 'model_state_dict' in loaded_data:
-            model.load_state_dict(loaded_data['model_state_dict'])
-            aux_info = {
-                'loss_history': loaded_data.get('loss_history', []),
-                'training_time': loaded_data.get('training_time', 0.0),
-                'final_total_loss': loaded_data.get('final_total_loss', float('inf')),
-                'hyper_parameters': loaded_data.get('hyper_parameters', {})
-            }
-        else:
-            model.load_state_dict(loaded_data)
-            aux_info = {
-                'loss_history': [],
-                'training_time': 0.0,
-                'final_total_loss': float('inf')
-            }
-        print(f"✅ Successfully loaded model weights: {weight_path}")
-    except RuntimeError as e:
-        print(f"⚠️ Model structure mismatch: {e}, using randomly initialized model for demonstration")
-        model = model_class(**model_kwargs)
-        model = model.to(device)
-        model.eval()
+
+    # strict=True (default): any architecture mismatch raises a RuntimeError
+    if isinstance(loaded_data, dict) and 'model_state_dict' in loaded_data:
+        # Complete custom dictionary format
+        model.load_state_dict(loaded_data['model_state_dict'])
+        aux_info = {
+            'loss_history': loaded_data.get('loss_history', []),
+            'training_time': loaded_data.get('training_time', 0.0),
+            'final_total_loss': loaded_data.get('final_total_loss', float('inf')),
+            'hyper_parameters': loaded_data.get('hyper_parameters', {})
+        }
+    else:
+        # Old format: pure state_dict
+        model.load_state_dict(loaded_data)
         aux_info = {
             'loss_history': [],
             'training_time': 0.0,
             'final_total_loss': float('inf')
         }
-    
-    # 5. Switch to evaluation mode
+    print(f"✅ Successfully loaded model weights: {weight_path}")
+
     model.eval()
-    
-    # 6. Handle loss history format
+
+    # Handle loss history format
     if isinstance(aux_info['loss_history'], torch.Tensor):
         aux_info['loss_history'] = aux_info['loss_history'].cpu().numpy().tolist()
     elif not isinstance(aux_info['loss_history'], list):
         aux_info['loss_history'] = []
-    
+
     return model, aux_info
 
 # Visualization function
@@ -793,6 +788,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
     plt.yscale("log")
     plt.legend(fontsize=10)
     plt.tight_layout()
+    save_figure("comparison_group_loss")
     plt.show()
     
     # 2. Solution and error comparison 
@@ -834,6 +830,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
     
     plt.tight_layout()
     plt.subplots_adjust(top=0.93)
+    save_figure("comparison_group_solution")
     plt.show()
 
 def plot_error_analysis_group(solution_results_list, test_data, model_names=None):
@@ -912,6 +909,7 @@ def plot_error_analysis_group(solution_results_list, test_data, model_names=None
     
     plt.tight_layout()
     plt.subplots_adjust(top=0.93)
+    save_figure("error_analysis_group")
     plt.show()
 
 def plot_comparison_group_error(loss_histories_list, solution_results_list, test_data, u_exact_np):
@@ -983,6 +981,7 @@ def plot_comparison_group_error(loss_histories_list, solution_results_list, test
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.90, wspace=0.25)
+    save_figure("comparison_group_error")
     plt.show()    
 
 def plot_wavefront_tracking(models_dict, threshold=0.5, n_times=50, n_x=500):
@@ -1006,7 +1005,7 @@ def plot_wavefront_tracking(models_dict, threshold=0.5, n_times=50, n_x=500):
                 i = idx[0]
                 x_front = x_np[i] + (threshold - u_exact[i]) * (x_np[i+1] - x_np[i]) / (u_exact[i+1] - u_exact[i])
                 wavefront_exact.append((t_val, x_front))
-        except:
+        except (IndexError, ValueError):
             pass
     
     ax1 = axes[0]
@@ -1034,7 +1033,7 @@ def plot_wavefront_tracking(models_dict, threshold=0.5, n_times=50, n_x=500):
                     i = idx_cross[0]
                     x_front = x_vals.numpy().flatten()[i]
                     wavefront_pred.append((t_val, x_front))
-            except:
+            except (IndexError, ValueError):
                 pass
         
         if wavefront_pred:
@@ -1069,7 +1068,7 @@ def plot_wavefront_tracking(models_dict, threshold=0.5, n_times=50, n_x=500):
                     i = idx_cross[0]
                     x_front = x_vals.numpy().flatten()[i]
                     wavefront_pred.append((t_val, x_front))
-            except:
+            except (IndexError, ValueError):
                 pass
         
         if len(wavefront_pred) > 1:
@@ -1101,7 +1100,7 @@ def plot_wavefront_tracking(models_dict, threshold=0.5, n_times=50, n_x=500):
                     i = idx_cross[0]
                     x_front = x_vals.numpy().flatten()[i]
                     wavefront_pred.append((t_val, x_front))
-            except:
+            except (IndexError, ValueError):
                 pass
         
         if len(wavefront_pred) > 1:
@@ -1117,6 +1116,7 @@ def plot_wavefront_tracking(models_dict, threshold=0.5, n_times=50, n_x=500):
     ax3.legend(fontsize=9)
     
     plt.tight_layout()
+    save_figure("wavefront_tracking")
     plt.show()
 
 def plot_combined_analysis_plus(loss_histories_list, solution_results_list, test_data, u_exact_np, models_dict, threshold=0.5, n_times=50, n_x=500):
@@ -1156,7 +1156,7 @@ def plot_combined_analysis_plus(loss_histories_list, solution_results_list, test
                 i = idx[0]
                 x_front = x_np[i] + (threshold - u_exact[i]) * (x_np[i+1] - x_np[i]) / (u_exact[i+1] - u_exact[i])
                 wavefront_exact.append((t_val, x_front))
-        except:
+        except (IndexError, ValueError):
             pass
     
     model_wavefront_data = {}
@@ -1175,7 +1175,7 @@ def plot_combined_analysis_plus(loss_histories_list, solution_results_list, test
                     i = idx_cross[0]
                     x_front = x_vals.numpy().flatten()[i]
                     wavefront_pred.append((t_val, x_front))
-            except:
+            except (IndexError, ValueError):
                 pass
         
         model_wavefront_data[name] = wavefront_pred
@@ -1240,6 +1240,7 @@ def plot_combined_analysis_plus(loss_histories_list, solution_results_list, test
     
     plt.tight_layout() 
     plt.subplots_adjust(top=0.90, wspace=0.20) 
+    save_figure("combined_analysis_plus")
     plt.show()
 
 def plot_reaction_diffusion_balance(model, model_name="Model", time_points=[0.5, 1.0, 1.5], n_x=300):
@@ -1304,6 +1305,7 @@ def plot_reaction_diffusion_balance(model, model_name="Model", time_points=[0.5,
     
     # plt.suptitle(f'{model_name}: Reaction-Diffusion Balance Analysis', fontsize=14, y=1.02)
     plt.tight_layout()
+    save_figure(f"reaction_diffusion_balance_{model_name}")
     plt.show()
 
 # generate training data for Fisher-KPP
@@ -1348,8 +1350,7 @@ def main():
     u_exact_np = u_exact.numpy()
     
     # 3. Construct weight file paths
-    current_script_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(current_script_dir, "..", "1D_fisher_kpp_parameter")
+    data_dir = PARAMETER_DIR
     os.makedirs(data_dir, exist_ok=True)
     
     # Define loading configurations for each model

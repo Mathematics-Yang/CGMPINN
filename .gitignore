@@ -1,0 +1,7 @@
+# Generated figures (saved by the scripts, not tracked)
+*_picture/
+
+# Python / tooling caches
+__pycache__/
+*.pyc
+.ruff_cache/

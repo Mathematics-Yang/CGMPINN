@@ -132,6 +132,12 @@ python 1D_poisson_plot.py
 
 这些参数可被绘图脚本读取，用于在不重新训练全部模型的情况下复现实验可视化结果。
 
+## 输出
+
+- 训练脚本会把训练好的 Adam→L-BFGS（Tanh）模型保存到对应的 `*_parameter` 文件夹，并覆盖其中的同名文件。
+- 绘图脚本在权重文件缺失或与模型结构不匹配时会直接报错。
+- 所有图片以 PDF（600 dpi）格式保存到 `<算例>/<算例>_picture/`，例如 `1D_heat/1D_heat_picture/1D_heat_plot_comparison_group_loss.pdf`。该文件夹会自动创建，且不纳入 git 版本管理。
+
 ## 引用
 
 如果本仓库对你的研究有帮助，请引用我们的工作：

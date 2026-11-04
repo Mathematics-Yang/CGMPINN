@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,10 +8,28 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from sklearn.mixture import GaussianMixture
 from matplotlib.ticker import ScalarFormatter, FuncFormatter
-import warnings
 import os
 import sys
-warnings.filterwarnings('ignore')
+import re
+
+# Output locations (resolved relative to this script, not the working directory)
+try:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:  # interactive session without __file__
+    SCRIPT_DIR = os.getcwd()
+SCRIPT_NAME = "1D_poisson_plot"
+PARAMETER_DIR = os.path.join(SCRIPT_DIR, "..", "1D_poisson_parameter")
+PICTURE_DIR = os.path.join(SCRIPT_DIR, "..", "1D_poisson_picture")
+
+
+def save_figure(name, fig=None):
+    """Save a figure as a 600-dpi PDF to PICTURE_DIR as <script>_<name>.pdf."""
+    os.makedirs(PICTURE_DIR, exist_ok=True)
+    safe_name = re.sub(r"[^\w.-]+", "_", f"{SCRIPT_NAME}_{name}").strip("_")
+    path = os.path.normpath(os.path.join(PICTURE_DIR, f"{safe_name}.pdf"))
+    (fig if fig is not None else plt.gcf()).savefig(path, format="pdf", dpi=600, bbox_inches="tight")
+    print(f"Figure saved to: {path}")
+
 
 plt.rcParams.update({
     'font.size': 12,
@@ -20,7 +40,7 @@ plt.rcParams.update({
     'ytick.labelsize': 11,
     'legend.fontsize': 10,
     'figure.dpi': 150,
-    'savefig.dpi': 300,
+    'savefig.dpi': 600,
     'savefig.bbox': 'tight'
 })
 
@@ -665,87 +685,52 @@ class CGMPINN(nn.Module):
 # General function to load models
 def load_pinn_model(model_class, model_kwargs, weight_path, device='cpu'):
     """
-    Load saved PINN complete information (model parameters + loss history + training time)
+    Load a saved PINN (model parameters + loss history + training time).
+
+    Raises an error instead of silently falling back to a randomly initialized
+    model, so that figures are never produced from untrained weights.
     :param model_class: Model class (e.g., PINN, STAR_PINN, LNN_PINN, etc.)
     :param model_kwargs: Model initialization parameters (dictionary)
     :param weight_path: Full path to the weight file (.pth)
     :param device: Device to load the model on (cpu/cuda)
-    :return: (Loaded model, auxiliary information dictionary) or (None, {})
+    :return: (Loaded model, auxiliary information dictionary)
     """
-    # 1. Check if the path exists
     if not os.path.exists(weight_path):
-        print(f"❌ Weight file not found: {weight_path}")
-        # Create mock data for demonstration (to avoid program interruption)
-        model = model_class(**model_kwargs)
-        model = model.to(device)
-        model.eval()
-        aux_info = {
-            'loss_history': [],
-            'training_time': 0.0,
-            'final_total_loss': float('inf')
-        }
-        return model, aux_info
-    
-    # 2. Try to load the complete custom dictionary
-    try:
-        loaded_data = torch.load(weight_path, map_location=device, weights_only=False)
-    except Exception as e:
-        print(f"⚠️ Failed to load file: {e}, using randomly initialized model for demonstration")
-        model = model_class(**model_kwargs)
-        model = model.to(device)
-        model.eval()
-        aux_info = {
-            'loss_history': [],
-            'training_time': 0.0,
-            'final_total_loss': float('inf')
-        }
-        return model, aux_info
-    
-    # 3. Create an empty model consistent with the training structure
+        raise FileNotFoundError(f"Weight file not found: {weight_path}")
+
+    loaded_data = torch.load(weight_path, map_location=device, weights_only=False)
+
     model = model_class(**model_kwargs)
     model = model.to(device)
-    
-    # 4. Extract and load model parameters
-    try:
-        if 'model_state_dict' in loaded_data:
-            # Scheme 1: Complete custom dictionary format
-            model.load_state_dict(loaded_data['model_state_dict'])
-            # Construct auxiliary information
-            aux_info = {
-                'loss_history': loaded_data.get('loss_history', []),
-                'training_time': loaded_data.get('training_time', 0.0),
-                'final_total_loss': loaded_data.get('final_total_loss', float('inf')),
-                'hyper_parameters': loaded_data.get('hyper_parameters', {})
-            }
-        else:
-            # Compatible with old format: pure state_dict
-            model.load_state_dict(loaded_data)
-            aux_info = {
-                'loss_history': [],
-                'training_time': 0.0,
-                'final_total_loss': float('inf')
-            }
-        print(f"✅ Successfully loaded model weights: {weight_path}")
-    except RuntimeError as e:
-        print(f"⚠️ Model structure mismatch: {e}, using randomly initialized model for demonstration")
-        model = model_class(**model_kwargs)
-        model = model.to(device)
-        model.eval()
+
+    # strict=True (default): any architecture mismatch raises a RuntimeError
+    if isinstance(loaded_data, dict) and 'model_state_dict' in loaded_data:
+        # Complete custom dictionary format
+        model.load_state_dict(loaded_data['model_state_dict'])
+        aux_info = {
+            'loss_history': loaded_data.get('loss_history', []),
+            'training_time': loaded_data.get('training_time', 0.0),
+            'final_total_loss': loaded_data.get('final_total_loss', float('inf')),
+            'hyper_parameters': loaded_data.get('hyper_parameters', {})
+        }
+    else:
+        # Old format: pure state_dict
+        model.load_state_dict(loaded_data)
         aux_info = {
             'loss_history': [],
             'training_time': 0.0,
             'final_total_loss': float('inf')
         }
-    
-    # 5. Switch to evaluation mode
+    print(f"✅ Successfully loaded model weights: {weight_path}")
+
     model.eval()
-    
-    # 6. Handle loss history format
+
+    # Handle loss history format
     if isinstance(aux_info['loss_history'], torch.Tensor):
         aux_info['loss_history'] = aux_info['loss_history'].cpu().numpy().tolist()
     elif not isinstance(aux_info['loss_history'], list):
         aux_info['loss_history'] = []
-    
+
     return model, aux_info
 
 # Visualization function
@@ -770,6 +755,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
     # plt.title("Training Loss Comparison", fontsize=14)
     plt.legend(fontsize=10)
     plt.tight_layout()
+    save_figure("comparison_group_loss")
     plt.show()
     
     # 2. Solution and error comparison (multiple subplots)
@@ -798,6 +784,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
     
     plt.tight_layout()
     plt.subplots_adjust(top=0.93)
+    save_figure("comparison_group_solution")
     plt.show()
 
 # error analysis plotting function
@@ -873,6 +860,7 @@ def plot_error_analysis_group(solution_results_list, test_data, model_names=None
     
     plt.tight_layout()
     plt.subplots_adjust(top=0.93)
+    save_figure("error_analysis_group")
     plt.show()
 
 # Main execution function
@@ -891,8 +879,7 @@ def main():
     u_exact_np = u_exact.numpy()
     
     # 3. Get current script path and construct correct weight file path
-    current_script_dir = os.path.dirname(os.path.abspath(__file__)) if __file__ in globals() else os.getcwd()
-    data_dir = os.path.join(current_script_dir, "..", "1D_poisson_parameter")
+    data_dir = PARAMETER_DIR
     os.makedirs(data_dir, exist_ok=True)  # Ensure directory exists
     
     # Define loading configurations for each model

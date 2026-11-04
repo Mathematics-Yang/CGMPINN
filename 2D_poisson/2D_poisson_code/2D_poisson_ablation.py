@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 import os
 import torch
@@ -7,8 +9,26 @@ from matplotlib import cm
 import matplotlib.pyplot as plt
 import time
 from sklearn.mixture import GaussianMixture
-import warnings
-warnings.filterwarnings('ignore')
+import re
+
+# Output locations (resolved relative to this script, not the working directory)
+try:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:  # interactive session without __file__
+    SCRIPT_DIR = os.getcwd()
+SCRIPT_NAME = "2D_poisson_ablation"
+PARAMETER_DIR = os.path.join(SCRIPT_DIR, "..", "2D_poisson_parameter")
+PICTURE_DIR = os.path.join(SCRIPT_DIR, "..", "2D_poisson_picture")
+
+
+def save_figure(name, fig=None):
+    """Save a figure as a 600-dpi PDF to PICTURE_DIR as <script>_<name>.pdf."""
+    os.makedirs(PICTURE_DIR, exist_ok=True)
+    safe_name = re.sub(r"[^\w.-]+", "_", f"{SCRIPT_NAME}_{name}").strip("_")
+    path = os.path.normpath(os.path.join(PICTURE_DIR, f"{safe_name}.pdf"))
+    (fig if fig is not None else plt.gcf()).savefig(path, format="pdf", dpi=600, bbox_inches="tight")
+    print(f"Figure saved to: {path}")
+
 
 torch.manual_seed(1224)
 np.random.seed(1224)
@@ -22,7 +42,7 @@ plt.rcParams.update({
     'ytick.labelsize': 11,
     'legend.fontsize': 10,
     'figure.dpi': 150,
-    'savefig.dpi': 300,
+    'savefig.dpi': 600,
     'savefig.bbox': 'tight'
 })
 
@@ -730,6 +750,7 @@ def plot_combined(activation_loss_histories: dict, activation_results: dict,
     
     plt.tight_layout()
     plt.subplots_adjust(top=0.90, wspace=0.20)
+    save_figure("combined")
     plt.show()
 
 def run_2D_poisson_ablation():
@@ -848,4 +869,5 @@ def run_2D_poisson_ablation():
             )
 
 
-run_2D_poisson_ablation()
+if __name__ == "__main__":
+    run_2D_poisson_ablation()

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,8 +8,27 @@ from matplotlib import cm
 import matplotlib.pyplot as plt
 import time
 from sklearn.mixture import GaussianMixture
-import warnings
-warnings.filterwarnings('ignore')
+import os
+import re
+
+# Output locations (resolved relative to this script, not the working directory)
+try:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:  # interactive session without __file__
+    SCRIPT_DIR = os.getcwd()
+SCRIPT_NAME = "1D_advection_diffusion_CGMPINN"
+PARAMETER_DIR = os.path.join(SCRIPT_DIR, "..", "1D_advection_diffusion_parameter")
+PICTURE_DIR = os.path.join(SCRIPT_DIR, "..", "1D_advection_diffusion_picture")
+
+
+def save_figure(name, fig=None):
+    """Save a figure as a 600-dpi PDF to PICTURE_DIR as <script>_<name>.pdf."""
+    os.makedirs(PICTURE_DIR, exist_ok=True)
+    safe_name = re.sub(r"[^\w.-]+", "_", f"{SCRIPT_NAME}_{name}").strip("_")
+    path = os.path.normpath(os.path.join(PICTURE_DIR, f"{safe_name}.pdf"))
+    (fig if fig is not None else plt.gcf()).savefig(path, format="pdf", dpi=600, bbox_inches="tight")
+    print(f"Figure saved to: {path}")
+
 
 # set random seeds for reproducibility
 torch.manual_seed(1224)
@@ -580,6 +601,7 @@ def plot_loss_curves_by_activation(activation_loss_histories: dict, optim_labels
         plt.legend(fontsize=10)
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
+        save_figure(f"loss_curves_{activation_name}")
         plt.show()
 
 def plot_solutions_by_activation_optimizer(
@@ -626,6 +648,7 @@ def plot_solutions_by_activation_optimizer(
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.95)
+        save_figure(f"solutions_{activation_name}")
         plt.show()
 
 # Main function
@@ -791,7 +814,8 @@ def train_1D_advection_diffusion_CGMPINN():
 
         # Save Tanh+Adam→LBFGS model
         if activation_name == 'Tanh':
-            save_path = "1D_advection_diffusion_tanh_adam2lbfgs_cgmpinn.pth"
+            save_path = os.path.join(PARAMETER_DIR, "1D_advection_diffusion_tanh_adam2lbfgs_cgmpinn.pth")
+            os.makedirs(PARAMETER_DIR, exist_ok=True)
             complete_save_dict = {
                 'model_state_dict': model_adam_lbfgs.state_dict(),
                 'loss_history': loss_history_adam_lbfgs,
@@ -861,4 +885,5 @@ def train_1D_advection_diffusion_CGMPINN():
             )
 
 # Execute main function
-train_1D_advection_diffusion_CGMPINN()
+if __name__ == "__main__":
+    train_1D_advection_diffusion_CGMPINN()
