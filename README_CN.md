@@ -87,7 +87,7 @@ CGMPINN/
 pip install numpy torch matplotlib scikit-learn scipy
 ```
 
-如果使用 CUDA，请根据你的 GPU 和 CUDA 版本从 PyTorch 官网安装对应版本。
+如果使用 CUDA，请根据你的 GPU 和 CUDA 版本从 PyTorch 官网安装对应版本。注意：脚本默认在 CPU 上运行（所有张量都创建在 CPU 上）。
 
 ## 快速开始
 

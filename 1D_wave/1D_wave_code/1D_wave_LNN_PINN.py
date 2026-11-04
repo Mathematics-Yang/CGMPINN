@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from matplotlib import cm  
+from matplotlib import cm
 import matplotlib.pyplot as plt
 import time
 import os
@@ -39,11 +39,11 @@ class TanhActivation(nn.Module):
         return torch.tanh(x)
 
 # define wave equation parameters
-ALPHA1 = 1.0    
-ALPHA2 = 1.0    
-GAMMA = 0.1     
-BETA = GAMMA    
-c = np.sqrt(GAMMA**2 + (ALPHA2 * np.pi)**2) / (ALPHA1 * np.pi) 
+ALPHA1 = 1.0
+ALPHA2 = 1.0
+GAMMA = 0.1
+BETA = GAMMA
+c = np.sqrt(GAMMA**2 + (ALPHA2 * np.pi)**2) / (ALPHA1 * np.pi)
 
 # LNN-PINN Liquid Residual Gated Block (Core Module)
 class LiquidResidualBlock(nn.Module):
@@ -53,39 +53,39 @@ class LiquidResidualBlock(nn.Module):
     Structure: Linear -> Activation -> Gated Fusion -> Residual Connection
     """
     def __init__(self, hidden_dim, activation):
-        super(LiquidResidualBlock, self).__init__()
+        super().__init__()
         self.hidden_dim = hidden_dim
-        self.activation = activation  
-        self.linear = nn.Linear(hidden_dim, hidden_dim)  
-        
+        self.activation = activation
+        self.linear = nn.Linear(hidden_dim, hidden_dim)
+
         # Learnable gating parameters (core of liquid residual, initialized close to 1 to retain original information)
-        self.alpha = nn.Parameter(torch.ones(1, hidden_dim) * 0.9)  
-        self.beta = nn.Parameter(torch.ones(1, hidden_dim) * 0.1)   
-        self.softplus = nn.Softplus()  
+        self.alpha = nn.Parameter(torch.ones(1, hidden_dim) * 0.9)
+        self.beta = nn.Parameter(torch.ones(1, hidden_dim) * 0.1)
+        self.softplus = nn.Softplus()
 
     def forward(self, x):
         # 1. Original input residual (retain original information)
         residual = x
-        
+
         # 2. Linear transformation + activation (extract new features)
         new_features = self.linear(x)
         new_features = self.activation(new_features)
-        
+
         # 3. Liquid gated fusion (adaptively regulate the proportion of new/old information)
         alpha = self.softplus(self.alpha)  # Ensure non-negativity
         beta = self.softplus(self.beta)    # Ensure non-negativity
         gated_features = alpha * residual + beta * new_features
-        
+
         # 4. Residual connection (final output, ensure training stability)
         output = self.activation(gated_features)
-        
+
         return output
 
 # LNN-PINN Model
 class LNN_PINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(LNN_PINN, self).__init__()
-        self.activation = activation  
+        super().__init__()
+        self.activation = activation
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         self.input_layer = nn.Linear(input_dim, hidden_dim)
@@ -93,9 +93,9 @@ class LNN_PINN(nn.Module):
         for _ in range(n_layers - 1):
             self.hidden_blocks.append(LiquidResidualBlock(hidden_dim, activation))
         self.output_layer = nn.Linear(hidden_dim, output_dim)
-    
+
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        input_tensor = torch.cat([x, t], dim=1)  
+        input_tensor = torch.cat([x, t], dim=1)
         input_tensor = self.input_layer(input_tensor)
         input_tensor = self.activation(input_tensor)
         for block in self.hidden_blocks:
@@ -104,7 +104,7 @@ class LNN_PINN(nn.Module):
         return input_tensor
 
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        u = self.forward(x, t) 
+        u = self.forward(x, t)
         u_t = torch.autograd.grad(
             outputs=u,
             inputs=t,
@@ -137,49 +137,49 @@ class LNN_PINN(nn.Module):
             retain_graph=True,
             only_inputs=True
         )[0]
-        
+
         return u_t, u_tt, u_x, u_xx
 
     def pde_loss(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         u_t, u_tt, _, u_xx = self.compute_gradients(x, t)
         pde_residual = u_tt + 2 * BETA * u_t - (c ** 2) * u_xx
         return torch.mean(pde_residual ** 2)
-    
+
     def initial_loss(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         u_pred = self.forward(x, t0)
         u0_exact = torch.sin(ALPHA1 * np.pi * x)
         initial_residual1 = u_pred - u0_exact
-        
+
         u_t, _, _, _ = self.compute_gradients(x, t0)
         v0_exact = -GAMMA * torch.sin(ALPHA1 * np.pi * x)
         initial_residual2 = u_t - v0_exact
-        
+
         return torch.mean(initial_residual1 ** 2) + torch.mean(initial_residual2 ** 2)
-    
+
     def boundary_loss(self, t: torch.Tensor) -> torch.Tensor:
         x0 = torch.zeros_like(t)
         u0_pred = self.forward(x0, t)
         u0_exact = torch.exp(-GAMMA * t) * torch.sin(ALPHA1 * np.pi * x0) * torch.cos(ALPHA2 * np.pi * t)
-        
+
         x1 = torch.ones_like(t)
         u1_pred = self.forward(x1, t)
         u1_exact = torch.exp(-GAMMA * t) * torch.sin(ALPHA1 * np.pi * x1) * torch.cos(ALPHA2 * np.pi * t)
-        
+
         boundary_residual1 = u0_pred - u0_exact
         boundary_residual2 = u1_pred - u1_exact
         return torch.mean(boundary_residual1 ** 2) + torch.mean(boundary_residual2 ** 2)
-    
+
     def final_total_loss(self, pde_data, initial_data, boundary_data) -> tuple[float, float, float, float]:
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         with torch.enable_grad():
             pde_loss_val = self.pde_loss(x_pde, t_pde).item()
             initial_loss_val = self.initial_loss(x_initial, t_initial).item()
             boundary_loss_val = self.boundary_loss(t_boundary).item()
             total_loss_val = pde_loss_val + initial_loss_val + boundary_loss_val
-        
+
         return total_loss_val, pde_loss_val, initial_loss_val, boundary_loss_val
 
 # 2. generate training and testing data
@@ -187,26 +187,26 @@ def generate_data(
     n_pde: int,
     n_initial: int,
     n_boundary: int,
-    n_test: int 
+    n_test: int
 ) -> tuple:
     x_pde = torch.rand(n_pde, 1, requires_grad=True)
     t_pde = torch.rand(n_pde, 1, requires_grad=True)
     pde_data = (x_pde, t_pde)
-    
+
     x_initial = torch.rand(n_initial, 1, requires_grad=True)
     t_initial = torch.zeros_like(x_initial, requires_grad=True)
     initial_data = (x_initial, t_initial)
-    
+
     t_boundary = torch.rand(n_boundary, 1, requires_grad=True)
     boundary_data = t_boundary
-    
+
     x_test = torch.linspace(0, 1, n_test).reshape(-1, 1)
     t_test = torch.linspace(0, 1, n_test).reshape(-1, 1)
     x_test_grid, t_test_grid = torch.meshgrid(x_test.squeeze(), t_test.squeeze(), indexing='ij')
     x_test_flat = x_test_grid.reshape(-1, 1)
     t_test_flat = t_test_grid.reshape(-1, 1)
     test_data = (x_test_flat, t_test_flat)
-    
+
     return pde_data, initial_data, boundary_data, test_data
 
 # 3. train function (Adam)
@@ -222,7 +222,7 @@ def train_with_optimizer(
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
     t_boundary = boundary_data
-    
+
     model.train()
 
     for epoch in range(epochs):
@@ -230,13 +230,13 @@ def train_with_optimizer(
         initial_loss = model.initial_loss(x_initial, t_initial)
         boundary_loss = model.boundary_loss(t_boundary)
         total_loss = pde_loss + initial_loss + boundary_loss
-        
+
         optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()
-        
+
         loss_history.append(total_loss.item())
-        
+
         if (epoch + 1) % 1000 == 0:
             print(
                 f'Epoch {epoch+1:4d} | Total Loss: {total_loss.item():.2e} | '
@@ -257,7 +257,7 @@ def train_with_lbfgs(
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
     t_boundary = boundary_data
-    
+
     model.train()
     pde_loss_val = initial_loss_val = boundary_loss_val = 0.0
 
@@ -269,12 +269,12 @@ def train_with_lbfgs(
         boundary_loss = model.boundary_loss(t_boundary)
         total_loss = pde_loss + initial_loss + boundary_loss
         total_loss.backward()
-        
+
         pde_loss_val = pde_loss.item()
         initial_loss_val = initial_loss.item()
         boundary_loss_val = boundary_loss.item()
         return total_loss
-    
+
     optimizer = optim.LBFGS(
         model.parameters(),
         max_iter=1,
@@ -282,12 +282,12 @@ def train_with_lbfgs(
         line_search_fn='strong_wolfe',
         lr=lr
     )
-    
+
     for iter_idx in range(max_iter):
         total_loss = optimizer.step(closure)
         current_loss = total_loss.item()
         loss_history.append(current_loss)
-        
+
         if (iter_idx + 1) % 500 == 0 or iter_idx == 0:
             print(
                 f'Iteration {iter_idx+1}/{max_iter} | Total Loss: {current_loss:.2e} | '
@@ -318,7 +318,7 @@ def train_adam_lbfgs(
         boundary_data=boundary_data,
         loss_history=loss_history
     )
-    
+
     print("\n=== Stage 2: Local Refinement with L-BFGS ===")
     train_with_lbfgs(
         model=model,
@@ -346,7 +346,7 @@ def evaluate_model(
         linf_error = torch.max(torch.abs(u_pred - u_exact)).item()
         pointwise_error = torch.abs(u_pred - u_exact).numpy()
         u_pred_np = u_pred.numpy()
-    
+
     return l2_error, l2_relative_error, linf_error, pointwise_error, u_pred_np
 
 # 7. visualization functions
@@ -373,14 +373,14 @@ def plot_solutions_by_activation_and_optimizer(
 ) -> None:
     x_test, t_test = test_data
     n_test = int(np.sqrt(len(x_test)))
-    
+
     for activation_name, results in activation_results.items():
         fig, axes = plt.subplots(3, 3, figsize=(20, 14))
         fig.suptitle(f'Solution Comparison - Activation: {activation_name}', fontsize=24, y=0.99)
-        
+
         for idx, optim_label in enumerate(optim_labels):
             u_pred = results[optim_label]['u_pred']
-            
+
             u_pred_grid = u_pred.reshape(n_test, n_test)
             u_exact_grid = u_exact_np.reshape(n_test, n_test)
             error_grid = np.abs(u_pred_grid - u_exact_grid)
@@ -393,64 +393,64 @@ def plot_solutions_by_activation_and_optimizer(
             ax1.set_ylabel('Position (x)', fontsize=10)
             ax1.set_title(f'{optim_label} - Predicted', fontsize=12)
             plt.colorbar(im1, ax=ax1, shrink=0.6, aspect=5)
-            
+
             ax2 = axes[idx, 1]
             im2 = ax2.pcolormesh(t_grid, x_grid, u_exact_grid, cmap=cm.jet, shading='gouraud')
             ax2.set_title('Analytical Solution', fontsize=12)
             plt.colorbar(im2, ax=ax2, shrink=0.6, aspect=5)
             ax2.set_xlabel('Time (t)', fontsize=10)
             ax2.set_ylabel('Position (x)', fontsize=10)
-            
+
             ax3 = axes[idx, 2]
             im3 = ax3.pcolormesh(t_grid, x_grid, error_grid, cmap=cm.viridis, shading='gouraud')
             ax3.set_xlabel('Time (t)', fontsize=10)
             ax3.set_ylabel('Position (x)', fontsize=10)
             ax3.set_title(f'{optim_label} - Absolute Error', fontsize=12)
             plt.colorbar(im3, ax=ax3, shrink=0.6, aspect=5)
-        
+
         plt.tight_layout()
         plt.subplots_adjust(top=0.95)
         save_figure(f"solutions_{activation_name}")
         plt.show()
 
 def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_flat):
-    x_grid_flat = x_grid_flat.ravel()  
-    t_grid_flat = t_grid_flat.ravel()  
+    x_grid_flat = x_grid_flat.ravel()
+    t_grid_flat = t_grid_flat.ravel()
     u_exact_flat = u_exact_flat.ravel()
 
     n_test = int(np.sqrt(len(x_grid_flat)))
     if n_test * n_test != len(x_grid_flat):
         raise ValueError(f"Number of data points {len(x_grid_flat)} is not a perfect square, please check the test data generation logic")
-    
-    x_coords = np.unique(x_grid_flat)  
-    t_coords = np.unique(t_grid_flat)  
+
+    x_coords = np.unique(x_grid_flat)
+    t_coords = np.unique(t_grid_flat)
     u_exact_grid = u_exact_flat.reshape(n_test, n_test)
-    
+
     optim_labels = list(u_pred_results.keys())
     n_optims = len(optim_labels)
     fig, axes = plt.subplots(n_optims, 3, figsize=(21, 6*n_optims))
     if n_optims == 1:
         axes = axes.reshape(1, -1)
-    
-    fig.suptitle(f'Damping Characteristics Comparison by Optimizers', fontsize=18, y=0.98)
-    
+
+    fig.suptitle('Damping Characteristics Comparison by Optimizers', fontsize=18, y=0.98)
+
     for row_idx, optim_label in enumerate(optim_labels):
         u_pred_grid = u_pred_results[optim_label].ravel().reshape(n_test, n_test)
-        
+
         # First column: spatial waveforms at different time points
         ax1 = axes[row_idx, 0]
         time_indices = [0, n_test//4, n_test//2, 3*n_test//4, n_test-1]
         colors = plt.cm.plasma(np.linspace(0, 0.9, len(time_indices)))
-        
+
         for idx, t_idx in enumerate(time_indices):
             t_val = t_coords[t_idx]
-            ax1.plot(x_coords, u_exact_grid[:, t_idx], 
+            ax1.plot(x_coords, u_exact_grid[:, t_idx],
                      color=colors[idx], linewidth=2.5, linestyle='-',
                      label=f'$t={t_val:.2f}$')
-            ax1.plot(x_coords, u_pred_grid[:, t_idx], 
+            ax1.plot(x_coords, u_pred_grid[:, t_idx],
                      color=colors[idx], linewidth=2, linestyle='--', marker='o',
                      markevery=10, markersize=4)
-        
+
         ax1.set_xlabel('Position $x$', fontsize=12)
         ax1.set_ylabel('$u(x,t)$', fontsize=12)
         ax1.set_title(f'{optim_label} - Spatial Profiles', fontsize=14)
@@ -458,28 +458,28 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
         ax1.grid(True, alpha=0.3, linestyle='--')
         ax1.axhline(y=0, color='k', linewidth=0.5)
         ax1.set_xlim([0, 1])
-        
-        ax1.annotate('', xy=(0.5, u_exact_grid[n_test//2, 0]), 
+
+        ax1.annotate('', xy=(0.5, u_exact_grid[n_test//2, 0]),
                          xytext=(0.5, u_exact_grid[n_test//2, -1]),
                          arrowprops=dict(arrowstyle='<->', color='green', lw=2))
         ax1.text(0.55, 0.5, 'Amplitude\nDecay', fontsize=10, color='green')
-        
+
         # Second column: temporal evolution at x=0.5
         ax2 = axes[row_idx, 1]
         x_mid_idx = np.argmin(np.abs(x_coords - 0.5))
-        t_vals = t_coords 
-        
-        ax2.plot(t_vals, u_exact_grid[x_mid_idx, :], 
+        t_vals = t_coords
+
+        ax2.plot(t_vals, u_exact_grid[x_mid_idx, :],
                  'b-', linewidth=2.5, label='Analytical Solution')
-        ax2.plot(t_vals, u_pred_grid[x_mid_idx, :], 
+        ax2.plot(t_vals, u_pred_grid[x_mid_idx, :],
                  'r--', linewidth=2, label=f'{optim_label} Prediction')
-        
+
         # Plot damping envelope
         envelope = np.exp(-GAMMA * t_vals)
-        ax2.plot(t_vals, envelope, 'g-.', linewidth=2, label=f'Envelope: $e^{{-\\gamma t}}$')
+        ax2.plot(t_vals, envelope, 'g-.', linewidth=2, label='Envelope: $e^{-\\gamma t}$')
         ax2.plot(t_vals, -envelope, 'g-.', linewidth=2)
         ax2.fill_between(t_vals, -envelope, envelope, alpha=0.1, color='green')
-        
+
         ax2.set_xlabel('Time $t$', fontsize=12)
         ax2.set_ylabel('$u(x=0.5, t)$', fontsize=12)
         ax2.set_title(f'{optim_label} - Temporal Evolution', fontsize=14)
@@ -487,23 +487,23 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
         ax2.grid(True, alpha=0.3, linestyle='--')
         ax2.axhline(y=0, color='k', linewidth=0.5)
         ax2.set_xlim([0, 1])
-        
+
         # Third column: error analysis at x=0.5
         ax3 = axes[row_idx, 2]
         u_exact_mid = u_exact_grid[x_mid_idx, :]
         u_pred_mid = u_pred_grid[x_mid_idx, :]
         abs_error = np.abs(u_pred_mid - u_exact_mid)
-        rel_error = abs_error / (np.abs(u_exact_mid) + 1e-8) * 100  
-        
+        rel_error = abs_error / (np.abs(u_exact_mid) + 1e-8) * 100
+
         ax3.plot(t_vals, abs_error, 'darkred', linewidth=2.5, label='Absolute Error')
         ax3_twin = ax3.twinx()
         ax3_twin.plot(t_vals, rel_error, 'orange', linewidth=2, linestyle='--', label='Relative Error (%)')
         ax3_twin.set_ylabel('Relative Error (%)', fontsize=12, color='orange')
         ax3_twin.tick_params(axis='y', labelcolor='orange')
-                
+
         ax3.axhline(y=0, color='black', linewidth=1, linestyle='-', alpha=0.8)
         ax3.fill_between(t_vals, 0, abs_error, alpha=0.2, color='darkred')
-        
+
         mean_error = np.mean(abs_error)
         max_error = np.max(abs_error)
         rmse = np.sqrt(np.mean(abs_error**2))
@@ -513,7 +513,7 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
         ax3.text(0.05, 0.95, error_text, transform=ax3.transAxes,
                  fontsize=9, verticalalignment='top',
                  bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-        
+
         handles1, labels1 = ax3.get_legend_handles_labels()
         handles2, labels2 = ax3_twin.get_legend_handles_labels()
         ax3.legend(handles1 + handles2, labels1 + labels2, loc='upper right', fontsize=9)
@@ -525,7 +525,7 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
         ax3.grid(True, alpha=0.3, linestyle='--')
         ax3.set_xlim([0, 1])
         ax3.set_ylim(bottom=0)
-    
+
     plt.tight_layout()
     plt.subplots_adjust(top=0.95, hspace=0.3)
     save_figure("damping_effect")
@@ -534,26 +534,26 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
 # 8. Main function
 def train_1D_wave_LNN_PINN_with_activations():
     # 1. Hyperparameter settings
-    n_layers = 4              
-    input_dim = 2             
-    output_dim = 1          
-    hidden_dim = 50        
-    n_pde = 2000             
-    n_initial = 300          
-    n_boundary = 300         
-    n_test = 100              
+    n_layers = 4
+    input_dim = 2
+    output_dim = 1
+    hidden_dim = 50
+    n_pde = 2000
+    n_initial = 300
+    n_boundary = 300
+    n_test = 100
     lr_lbfgs_config = {'Tanh': 1.0}
-    lr_adam_lbfgs = 0.8       
-    epochs_adam = 15000    
-    max_iter_lbfgs = 15000    
-    adam_lbfgs_adam_epochs = 5000  
-    adam_lbfgs_lbfgs_iter = 10000  
-    
+    lr_adam_lbfgs = 0.8
+    epochs_adam = 15000
+    max_iter_lbfgs = 15000
+    adam_lbfgs_adam_epochs = 5000
+    adam_lbfgs_lbfgs_iter = 10000
+
     # Activation function dictionary
     activations = {'Tanh': TanhActivation()}
     activation_names = list(activations.keys())
     optim_labels = ['Adam (LNN-PINN)', 'L-BFGS (LNN-PINN)', 'Adam→L-BFGS (LNN-PINN)']
-    
+
     # 2. Generate data
     print("Generating training and testing data...")
     pde_data, initial_data, boundary_data, test_data = generate_data(
@@ -563,26 +563,26 @@ def train_1D_wave_LNN_PINN_with_activations():
         n_test=n_test
     )
     x_test, t_test = test_data
-    
+
     # Calculate exact solution: u(x,t) = e^(-γt) * sin(α1πx) * cos(α2πt)
     u_exact = torch.exp(-GAMMA * t_test) * torch.sin(ALPHA1 * np.pi * x_test) * torch.cos(ALPHA2 * np.pi * t_test)
     u_exact_np = u_exact.numpy()
-    
+
     # 3. Initialize storage variables
     activation_loss_histories = {}
     activation_results = {}
     activation_training_times = {}
-    
+
     # 4. Train all optimizers for each activation function
     for activation_name, activation_fn in activations.items():
         print("\n" + "="*80)
         print(f"Starting training - Activation function: {activation_name} | Equation parameters: α1={ALPHA1}, α2={ALPHA2}, γ={GAMMA}, β={BETA}, c={c}")
         print("="*80)
-        
+
         current_loss_histories = []
         current_results = {}
         current_training_times = []
-        
+
         # 4.1 Adam training
         print(f"\n--- {activation_name} + Adam ---")
         model_adam = LNN_PINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn)
@@ -600,7 +600,7 @@ def train_1D_wave_LNN_PINN_with_activations():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate Adam
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_adam, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary = model_adam.final_total_loss(pde_data, initial_data, boundary_data)
@@ -616,7 +616,7 @@ def train_1D_wave_LNN_PINN_with_activations():
         }
         current_loss_histories.append(loss_history_adam)
         print(f"Adam training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.2 L-BFGS training
         print(f"\n--- {activation_name} + L-BFGS ---")
         model_lbfgs = LNN_PINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn)
@@ -633,7 +633,7 @@ def train_1D_wave_LNN_PINN_with_activations():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate L-BFGS
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_lbfgs, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary = model_lbfgs.final_total_loss(pde_data, initial_data, boundary_data)
@@ -649,7 +649,7 @@ def train_1D_wave_LNN_PINN_with_activations():
         }
         current_loss_histories.append(loss_history_lbfgs)
         print(f"L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.3 Adam→L-BFGS training
         print(f"\n--- {activation_name} + Adam→L-BFGS ---")
         model_adam_lbfgs = LNN_PINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn)
@@ -667,7 +667,7 @@ def train_1D_wave_LNN_PINN_with_activations():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate Adam→L-BFGS
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_adam_lbfgs, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary = model_adam_lbfgs.final_total_loss(pde_data, initial_data, boundary_data)
@@ -682,18 +682,18 @@ def train_1D_wave_LNN_PINN_with_activations():
             'u_pred': u_pred
         }
         current_loss_histories.append(loss_history_adam_lbfgs)
-        
+
         # Save Tanh+Adam→L-BFGS model
-        if activation_name == 'Tanh':  
+        if activation_name == 'Tanh':
             save_path = os.path.join(PARAMETER_DIR, "1D_wave_tanh_adam2lbfgs_lnn_pinn.pth")
             os.makedirs(PARAMETER_DIR, exist_ok=True)
             complete_save_dict = {
-                'model_state_dict': model_adam_lbfgs.state_dict(), 
-                'loss_history': loss_history_adam_lbfgs,            
-                'final_total_loss': final_total,                    
-                'training_time': train_time,                        
-                'activation_name': activation_name,                
-                'hyper_parameters': {                               
+                'model_state_dict': model_adam_lbfgs.state_dict(),
+                'loss_history': loss_history_adam_lbfgs,
+                'final_total_loss': final_total,
+                'training_time': train_time,
+                'activation_name': activation_name,
+                'hyper_parameters': {
                     'n_layers': n_layers,
                     'hidden_dim': hidden_dim,
                     'adam_epochs': adam_lbfgs_adam_epochs,
@@ -702,21 +702,21 @@ def train_1D_wave_LNN_PINN_with_activations():
             }
             torch.save(complete_save_dict, save_path)
             print(f"✅ Tanh+Adam→L-BFGS wave equation LNN-PINN model saved to: {save_path}")
-        
+
         print(f"Adam→L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # Save current activation function results
         activation_loss_histories[activation_name] = current_loss_histories
         activation_results[activation_name] = current_results
         activation_training_times[activation_name] = current_training_times
-    
+
     # 5. Results visualization
     plot_loss_curves_by_activation(activation_loss_histories, optim_labels)
     plot_solutions_by_activation_and_optimizer(activation_results, test_data, u_exact_np, optim_labels)
     plot_damping_effect(
-        x_test.numpy(), 
-        t_test.numpy(), 
-        {optim_label: activation_results['Tanh'][optim_label]['u_pred'] for optim_label in optim_labels}, 
+        x_test.numpy(),
+        t_test.numpy(),
+        {optim_label: activation_results['Tanh'][optim_label]['u_pred'] for optim_label in optim_labels},
         u_exact.numpy()
     )
 
@@ -741,7 +741,7 @@ def train_1D_wave_LNN_PINN_with_activations():
                 f"{results['linf_error']:<12.2e} "
                 f"{results['final_total_loss']:<12.2e}"
             )
-    
+
     # 7. Print best performance for each activation function
     print("\n" + "="*100)
     print("Best Performance for Each Activation Function (Sorted by Standard L2 Error - LNN-PINN)")

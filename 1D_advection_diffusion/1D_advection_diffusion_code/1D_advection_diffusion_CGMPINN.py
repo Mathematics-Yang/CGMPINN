@@ -67,7 +67,7 @@ class ReLoBRaLoWeights(AdaptiveLossWeights):
         self.ema_losses = None
         self.initial_losses = None
 
-    def update(self, losses, **kwargs):
+    def update(self, losses):
         losses_tensor = torch.tensor(losses, device=self.device, dtype=torch.float32)
 
         for i, loss in enumerate(losses):
@@ -189,7 +189,7 @@ class CGMPINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation,
                  use_curriculum=True, gmm_kwargs=None,
                  use_relobralo=True, relobralo_kwargs=None):
-        super(CGMPINN, self).__init__()
+        super().__init__()
         self.activation = activation
         self.use_curriculum = use_curriculum  # Curriculum learning switch
         self.use_relobralo = use_relobralo    # ReLoBRaLo adaptive weight switch
@@ -413,11 +413,10 @@ def train_with_optimizer(
     boundary_data: torch.Tensor,
     loss_history: list,
     step_offset: int = 0,
-    global_total_steps: int = None
+    global_total_steps: int | None = None
 ) -> int:
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
-    t_boundary = boundary_data
     model.train()
 
     if global_total_steps is None:
@@ -468,11 +467,10 @@ def train_with_lbfgs(
     lr: float,
     max_iter: int,
     step_offset: int = 0,
-    global_total_steps: int = None
+    global_total_steps: int | None = None
 ) -> int:
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
-    t_boundary = boundary_data
     model.train()
 
     if global_total_steps is None:
@@ -539,7 +537,7 @@ def train_adam_lbfgs(
 ) -> None:
     global_total_steps = adam_epochs + lbfgs_max_iter
 
-    print(f"\n=== Stage 1: Adam Global Exploration (starting with easy samples) ===")
+    print("\n=== Stage 1: Adam Global Exploration (starting with easy samples) ===")
     print(f"    Global step range: 1 ~ {adam_epochs}, tau: 0 → {adam_epochs/global_total_steps:.3f}")
 
     optimizer_adam = optim.Adam(model.parameters(), lr=0.001)
@@ -555,7 +553,7 @@ def train_adam_lbfgs(
         global_total_steps=global_total_steps
     )
 
-    print(f"\n=== Stage 2: L-BFGS Local Refinement (gradually focusing on hard samples) ===")
+    print("\n=== Stage 2: L-BFGS Local Refinement (gradually focusing on hard samples) ===")
     print(f"    Global step range: {current_step+1} ~ {global_total_steps}, tau: {current_step/global_total_steps:.3f} → 1.0")
 
     train_with_lbfgs(

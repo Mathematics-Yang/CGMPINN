@@ -3,15 +3,12 @@ from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.ticker import ScalarFormatter
 from sklearn.mixture import GaussianMixture
 import os
-import sys
-import time
 import re
 
 # Output locations (resolved relative to this script, not the working directory)
@@ -59,12 +56,12 @@ DOMAIN_MAX = 1.0  # domain maximum
 
 # hyperparameters
 N_LAYERS = 4
-N_LAYERS_PER_BLOCK = 2 
-N_BLOCKS = 3  
-INPUT_DIM = 2  
+N_LAYERS_PER_BLOCK = 2
+N_BLOCKS = 3
+INPUT_DIM = 2
 OUTPUT_DIM = 1
 HIDDEN_DIM = 50
-N_TEST = 100  
+N_TEST = 100
 GRAD_WEIGHT = 0.01
 
 class TanhActivation(nn.Module):
@@ -86,7 +83,7 @@ def generate_training_data(n_pde=2000, n_boundary=250):
     x_pde.requires_grad_(True)
     y_pde.requires_grad_(True)
     pde_data = (x_pde, y_pde)
-    
+
     x0 = torch.zeros(n_boundary, 1)
     y0 = torch.linspace(DOMAIN_MIN, DOMAIN_MAX, n_boundary).reshape(-1, 1)
     x1 = torch.ones(n_boundary, 1)
@@ -95,9 +92,9 @@ def generate_training_data(n_pde=2000, n_boundary=250):
     y2 = torch.zeros(n_boundary, 1)
     x3 = torch.linspace(DOMAIN_MIN, DOMAIN_MAX, n_boundary).reshape(-1, 1)
     y3 = torch.ones(n_boundary, 1)
-    
+
     boundary_data = (x0, y0, x1, y1, x2, y2, x3, y3)
-    
+
     return pde_data, boundary_data
 
 # evaluate model
@@ -121,18 +118,18 @@ def evaluate_model(model, test_data: tuple, u_exact: torch.Tensor) -> tuple:
 # 1. Basic PINN model (2D Poisson equation)
 class PINN2D(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(PINN2D, self).__init__()
+        super().__init__()
         self.activation = activation
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
         for _ in range(n_layers - 1):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, y], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_laplacian(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
         u = self.forward(x, y)
         u_x = torch.autograd.grad(
@@ -152,9 +149,9 @@ class PINN2D(nn.Module):
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
         laplacian_u = u_xx + u_yy
-        
+
         return u_xx, u_yy, laplacian_u
-    
+
     def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_beta1pi_x = torch.sin(BETA1 * np.pi * x)
         sin_beta2pi_y = torch.sin(BETA2 * np.pi * y)
@@ -162,39 +159,39 @@ class PINN2D(nn.Module):
         laplacian_first = - (np.pi**2) * (BETA1**2 + BETA2**2) * sin_beta1pi_x * sin_beta2pi_y
         laplacian_second = 4 * (x**2 + y**2 - 1) * exp_term
         f = laplacian_first + laplacian_second
-        
+
         return f
-    
+
     def pde_loss(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         _, _, laplacian_u = self.compute_laplacian(x, y)
         f = self.source_term(x, y)
         pde_residual = laplacian_u - f
         return torch.mean(pde_residual ** 2)
-    
+
     def boundary_loss(self, boundary_data) -> torch.Tensor:
         x0, y0, x1, y1, x2, y2, x3, y3 = boundary_data
-        
+
         u0_pred = self.forward(x0, y0)
         u0_exact = self.analytical_solution(x0, y0)
-        
+
         u1_pred = self.forward(x1, y1)
         u1_exact = self.analytical_solution(x1, y1)
-        
+
         u2_pred = self.forward(x2, y2)
         u2_exact = self.analytical_solution(x2, y2)
-        
+
         u3_pred = self.forward(x3, y3)
         u3_exact = self.analytical_solution(x3, y3)
-        
+
         boundary_residual = (
             torch.mean((u0_pred - u0_exact)**2) +
             torch.mean((u1_pred - u1_exact)**2) +
             torch.mean((u2_pred - u2_exact)**2) +
             torch.mean((u3_pred - u3_exact)**2)
         )
-        
+
         return boundary_residual
-    
+
     def analytical_solution(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_part = torch.sin(BETA1 * np.pi * x) * torch.sin(BETA2 * np.pi * y)
         exp_part = torch.exp(-x**2 - y**2)
@@ -203,26 +200,26 @@ class PINN2D(nn.Module):
 # 2. lbPINN model (adaptive loss weights)
 class lbPINN2D(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(lbPINN2D, self).__init__()
+        super().__init__()
         self.activation = activation
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
         for _ in range(n_layers - 1):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-        
+
         # Adaptive weight parameters (2 loss terms: PDE, boundary)
         self.log_var_pde = nn.Parameter(torch.tensor(0.0))
         self.log_var_boundary = nn.Parameter(torch.tensor(0.0))
         self.reg_coeff = 0.5
-    
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, y], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_laplacian(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
         u = self.forward(x, y)
-        
+
         u_x = torch.autograd.grad(
             outputs=u, inputs=x, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -231,7 +228,7 @@ class lbPINN2D(nn.Module):
             outputs=u, inputs=y, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         u_xx = torch.autograd.grad(
             outputs=u_x, inputs=x, grad_outputs=torch.ones_like(u_x),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -240,75 +237,75 @@ class lbPINN2D(nn.Module):
             outputs=u_y, inputs=y, grad_outputs=torch.ones_like(u_y),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         laplacian_u = u_xx + u_yy
         return u_xx, u_yy, laplacian_u
-    
+
     def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_beta1pi_x = torch.sin(BETA1 * np.pi * x)
         sin_beta2pi_y = torch.sin(BETA2 * np.pi * y)
         exp_term = torch.exp(-x**2 - y**2)
-        
+
         laplacian_first = - (np.pi**2) * (BETA1**2 + BETA2**2) * sin_beta1pi_x * sin_beta2pi_y
         laplacian_second = 4 * (x**2 + y**2 - 1) * exp_term
-        
+
         f = laplacian_first + laplacian_second
         return f
-    
+
     def pde_residual(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         _, _, laplacian_u = self.compute_laplacian(x, y)
         f = self.source_term(x, y)
         return laplacian_u - f
-    
+
     def boundary_residual(self, boundary_data) -> torch.Tensor:
         x0, y0, x1, y1, x2, y2, x3, y3 = boundary_data
-        
+
         u0_pred = self.forward(x0, y0)
         u0_exact = self.analytical_solution(x0, y0)
-        
+
         u1_pred = self.forward(x1, y1)
         u1_exact = self.analytical_solution(x1, y1)
-        
+
         u2_pred = self.forward(x2, y2)
         u2_exact = self.analytical_solution(x2, y2)
-        
+
         u3_pred = self.forward(x3, y3)
         u3_exact = self.analytical_solution(x3, y3)
-        
+
         return torch.cat([
             u0_pred - u0_exact, u1_pred - u1_exact,
             u2_pred - u2_exact, u3_pred - u3_exact
         ], dim=0)
-    
+
     def adaptive_loss(self, pde_data, boundary_data) -> tuple:
         x_pde, y_pde = pde_data
-        
+
         pde_res = self.pde_residual(x_pde, y_pde)
         boundary_res = self.boundary_residual(boundary_data)
-    
+
         raw_weight_pde = 0.5 * torch.exp(-self.log_var_pde)
         raw_weight_boundary = 0.5 * torch.exp(-self.log_var_boundary)
-        
+
         loss_pde = raw_weight_pde * torch.mean(pde_res ** 2)
         loss_boundary = raw_weight_boundary * torch.mean(boundary_res ** 2)
-        
+
         reg_term = self.reg_coeff * (
-            F.softplus(self.log_var_pde) + 
+            F.softplus(self.log_var_pde) +
             F.softplus(self.log_var_boundary)
         )
-        
+
         total_loss = loss_pde + loss_boundary + reg_term
         return total_loss, loss_pde, loss_boundary
-    
+
     def analytical_solution(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_part = torch.sin(BETA1 * np.pi * x) * torch.sin(BETA2 * np.pi * y)
         exp_part = torch.exp(-x**2 - y**2)
         return sin_part + exp_part
 
-# 3. gPINN model (gradient-enhanced) 
+# 3. gPINN model (gradient-enhanced)
 class gPINN2D(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation, grad_weight=0.01):
-        super(gPINN2D, self).__init__()
+        super().__init__()
         self.activation = activation
         self.grad_weight = grad_weight
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
@@ -316,14 +313,14 @@ class gPINN2D(nn.Module):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, y], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_high_order_laplacian(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
         u = self.forward(x, y)
-        
+
         u_x = torch.autograd.grad(
             outputs=u, inputs=x, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -332,7 +329,7 @@ class gPINN2D(nn.Module):
             outputs=u, inputs=y, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         u_xx = torch.autograd.grad(
             outputs=u_x, inputs=x, grad_outputs=torch.ones_like(u_x),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -341,12 +338,12 @@ class gPINN2D(nn.Module):
             outputs=u_y, inputs=y, grad_outputs=torch.ones_like(u_y),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         laplacian_u = u_xx + u_yy
-        
+
         f = self.source_term(x, y)
         res = laplacian_u - f
-        
+
         res_x = torch.autograd.grad(
             outputs=res, inputs=x, grad_outputs=torch.ones_like(res),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -355,47 +352,47 @@ class gPINN2D(nn.Module):
             outputs=res, inputs=y, grad_outputs=torch.ones_like(res),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         return laplacian_u, res, res_x, res_y
-    
+
     def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_beta1pi_x = torch.sin(BETA1 * np.pi * x)
         sin_beta2pi_y = torch.sin(BETA2 * np.pi * y)
         exp_term = torch.exp(-x**2 - y**2)
-        
+
         laplacian_first = - (np.pi**2) * (BETA1**2 + BETA2**2) * sin_beta1pi_x * sin_beta2pi_y
         laplacian_second = 4 * (x**2 + y**2 - 1) * exp_term
-        
+
         f = laplacian_first + laplacian_second
         return f
-    
+
     def pde_loss(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         _, res, _, _ = self.compute_high_order_laplacian(x, y)
         return torch.mean(res ** 2)
-    
+
     def grad_loss(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         _, _, res_x, res_y = self.compute_high_order_laplacian(x, y)
         grad_loss = torch.mean(res_x ** 2) + torch.mean(res_y ** 2)
         return self.grad_weight * grad_loss
-    
+
     def boundary_loss(self, boundary_data) -> torch.Tensor:
         x0, y0, x1, y1, x2, y2, x3, y3 = boundary_data
-        
+
         u0_pred = self.forward(x0, y0)
         u0_exact = self.analytical_solution(x0, y0)
-        
+
         u1_pred = self.forward(x1, y1)
         u1_exact = self.analytical_solution(x1, y1)
-        
+
         u2_pred = self.forward(x2, y2)
         u2_exact = self.analytical_solution(x2, y2)
-        
+
         u3_pred = self.forward(x3, y3)
         u3_exact = self.analytical_solution(x3, y3)
-        
+
         return torch.mean((u0_pred - u0_exact)**2 + (u1_pred - u1_exact)**2 +
                           (u2_pred - u2_exact)**2 + (u3_pred - u3_exact)**2)
-    
+
     def analytical_solution(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_part = torch.sin(BETA1 * np.pi * x) * torch.sin(BETA2 * np.pi * y)
         exp_part = torch.exp(-x**2 - y**2)
@@ -405,11 +402,11 @@ class gPINN2D(nn.Module):
 class LiquidResidualBlock(nn.Module):
     """Lightweight Liquid Residual Gating Block"""
     def __init__(self, hidden_dim, activation):
-        super(LiquidResidualBlock, self).__init__()
+        super().__init__()
         self.hidden_dim = hidden_dim
-        self.activation = activation  
-        self.linear = nn.Linear(hidden_dim, hidden_dim)  
-        
+        self.activation = activation
+        self.linear = nn.Linear(hidden_dim, hidden_dim)
+
         # Learnable gating parameters
         self.alpha = nn.Parameter(torch.ones(1, hidden_dim) * 0.9)
         self.beta = nn.Parameter(torch.ones(1, hidden_dim) * 0.1)
@@ -419,19 +416,19 @@ class LiquidResidualBlock(nn.Module):
         residual = x
         new_features = self.linear(x)
         new_features = self.activation(new_features)
-        
+
         # Liquid gating fusion
         alpha = self.softplus(self.alpha)
         beta = self.softplus(self.beta)
         gated_features = alpha * residual + beta * new_features
-        
+
         output = self.activation(gated_features)
         return output
 
 class LNN_PINN2D(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(LNN_PINN2D, self).__init__()
-        self.activation = activation  
+        super().__init__()
+        self.activation = activation
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         self.input_layer = nn.Linear(input_dim, hidden_dim)
@@ -439,7 +436,7 @@ class LNN_PINN2D(nn.Module):
         for _ in range(n_layers - 1):
             self.hidden_blocks.append(LiquidResidualBlock(hidden_dim, activation))
         self.output_layer = nn.Linear(hidden_dim, output_dim)
-    
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, y], dim=1)
         x = self.input_layer(input_tensor)
@@ -448,10 +445,10 @@ class LNN_PINN2D(nn.Module):
             x = block(x)
         x = self.output_layer(x)
         return x
-    
+
     def compute_laplacian(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
         u = self.forward(x, y)
-        
+
         u_x = torch.autograd.grad(
             outputs=u, inputs=x, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -460,7 +457,7 @@ class LNN_PINN2D(nn.Module):
             outputs=u, inputs=y, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         u_xx = torch.autograd.grad(
             outputs=u_x, inputs=x, grad_outputs=torch.ones_like(u_x),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -469,21 +466,21 @@ class LNN_PINN2D(nn.Module):
             outputs=u_y, inputs=y, grad_outputs=torch.ones_like(u_y),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         laplacian_u = u_xx + u_yy
         return u_xx, u_yy, laplacian_u
-    
+
     def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_beta1pi_x = torch.sin(BETA1 * np.pi * x)
         sin_beta2pi_y = torch.sin(BETA2 * np.pi * y)
         exp_term = torch.exp(-x**2 - y**2)
-        
+
         laplacian_first = - (np.pi**2) * (BETA1**2 + BETA2**2) * sin_beta1pi_x * sin_beta2pi_y
         laplacian_second = 4 * (x**2 + y**2 - 1) * exp_term
-        
+
         f = laplacian_first + laplacian_second
         return f
-    
+
     def analytical_solution(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_part = torch.sin(BETA1 * np.pi * x) * torch.sin(BETA2 * np.pi * y)
         exp_part = torch.exp(-x**2 - y**2)
@@ -492,49 +489,49 @@ class LNN_PINN2D(nn.Module):
 # 5. STAR-PINN model (Stacked Adaptive Residual PINN)
 class LightweightPINNBlock2D(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(LightweightPINNBlock2D, self).__init__()
+        super().__init__()
         self.activation = activation
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
         for _ in range(n_layers - 1):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x):
         return self.layers(x)
 
 class STAR_PINN2D(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers_per_block, activation, n_blocks=3):
-        super(STAR_PINN2D, self).__init__()
+        super().__init__()
         self.n_blocks = n_blocks
         self.activation = activation
-        
+
         # Create stacked lightweight PINN blocks
         self.pinn_blocks = nn.ModuleList([
             LightweightPINNBlock2D(input_dim, output_dim, hidden_dim, n_layers_per_block, activation)
             for _ in range(n_blocks)
         ])
-        
+
         # Adaptive residual weights
         self.adaptive_weights = nn.Parameter(torch.ones(n_blocks - 1) * 0.5)
-    
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, y], dim=1)
-        
+
         # Output of the first block
         current_output = self.pinn_blocks[0](input_tensor)
-        
+
         # Subsequent blocks: residual fusion
         for i in range(1, self.n_blocks):
             block_output = self.pinn_blocks[i](input_tensor)
             alpha = torch.sigmoid(self.adaptive_weights[i-1])
             current_output = block_output + alpha * current_output
-        
+
         return current_output
-    
+
     def compute_laplacian(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
         u = self.forward(x, y)
-        
+
         u_x = torch.autograd.grad(
             outputs=u, inputs=x, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -543,7 +540,7 @@ class STAR_PINN2D(nn.Module):
             outputs=u, inputs=y, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         u_xx = torch.autograd.grad(
             outputs=u_x, inputs=x, grad_outputs=torch.ones_like(u_x),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -552,21 +549,21 @@ class STAR_PINN2D(nn.Module):
             outputs=u_y, inputs=y, grad_outputs=torch.ones_like(u_y),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         laplacian_u = u_xx + u_yy
         return u_xx, u_yy, laplacian_u
-    
+
     def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_beta1pi_x = torch.sin(BETA1 * np.pi * x)
         sin_beta2pi_y = torch.sin(BETA2 * np.pi * y)
         exp_term = torch.exp(-x**2 - y**2)
-        
+
         laplacian_first = - (np.pi**2) * (BETA1**2 + BETA2**2) * sin_beta1pi_x * sin_beta2pi_y
         laplacian_second = 4 * (x**2 + y**2 - 1) * exp_term
-        
+
         f = laplacian_first + laplacian_second
         return f
-    
+
     def analytical_solution(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_part = torch.sin(BETA1 * np.pi * x) * torch.sin(BETA2 * np.pi * y)
         exp_part = torch.exp(-x**2 - y**2)
@@ -586,31 +583,31 @@ class GMMCurriculumWeight:
 
     def compute_weights(self, residuals: torch.Tensor, tau: float) -> torch.Tensor:
         res_np = residuals.detach().cpu().numpy().reshape(-1, 1)
-        
+
         try:
             self.gmm.fit(res_np)
             gamma = self.gmm.predict_proba(res_np)
             sigma_sq = self.gmm.covariances_.flatten()
-            
+
             # Compute component difficulty
             res_squared = res_np.flatten() ** 2
             component_difficulty = np.array([
                 np.sum(gamma[:, j] * res_squared) / (np.sum(gamma[:, j]) + self.epsilon)
                 for j in range(self.n_components)
             ])
-            
+
             # Normalize difficulty
             diff_min, diff_max = component_difficulty.min(), component_difficulty.max()
             if diff_max - diff_min > self.epsilon:
                 normalized_diff = (component_difficulty - diff_min) / (diff_max - diff_min)
             else:
                 normalized_diff = np.zeros_like(component_difficulty)
-            
+
             # Curriculum learning weights
             easy_weight = np.exp(-self.beta * normalized_diff)
             hard_weight = np.exp(-self.beta * (1 - normalized_diff))
             curriculum_weight = (1 - tau) * easy_weight + tau * hard_weight
-            
+
             # Variance factor
             if self.use_variance_factor:
                 variance_factor = 1 / (sigma_sq + self.epsilon)
@@ -619,7 +616,7 @@ class GMMCurriculumWeight:
                 component_weights = curriculum_weight * effective_variance_factor
             else:
                 component_weights = curriculum_weight
-            
+
             # Sample weights
             point_weights = np.sum(gamma * component_weights[np.newaxis, :], axis=1)
             self._last_valid_weights = point_weights.copy()
@@ -629,7 +626,7 @@ class GMMCurriculumWeight:
                 point_weights = self._last_valid_weights
             else:
                 point_weights = np.ones(len(res_np))
-        
+
         # Normalize weights
         point_weights = point_weights / (point_weights.mean() + self.epsilon)
         return torch.tensor(point_weights.reshape(-1, 1), dtype=torch.float32).to(residuals.device)
@@ -645,22 +642,22 @@ class ReLoBRaLoWeights:
         self.ema_losses = None
         self.initial_losses = None
         self.weights = torch.ones(n_losses, device=device, dtype=torch.float32)
-    
+
     def update(self, losses):
         losses_tensor = torch.tensor(losses, device=self.device, dtype=torch.float32)
-        
+
         for i, loss in enumerate(losses):
             self.loss_history[i].append(loss)
-        
+
         # Initialization
         if self.initial_losses is None:
             self.initial_losses = losses_tensor.clone()
             self.ema_losses = losses_tensor.clone()
             return
-        
+
         # Update EMA losses
         self.ema_losses = self.alpha * self.ema_losses + (1 - self.alpha) * losses_tensor
-        
+
         # Random lookback
         if np.random.rand() < self.rho:
             reference = self.ema_losses
@@ -670,7 +667,7 @@ class ReLoBRaLoWeights:
                 [self.loss_history[i][lookback_idx] for i in range(self.n_losses)],
                 device=self.device, dtype=torch.float32
             )
-        
+
         # Compute relative changes and weights
         relative_losses = losses_tensor / (reference + 1e-8)
         scaled_losses = relative_losses / self.temperature
@@ -678,35 +675,35 @@ class ReLoBRaLoWeights:
 
 class CGMPINN2D(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation, use_curriculum=True, gmm_kwargs=None, relobralo_kwargs=None):
-        super(CGMPINN2D, self).__init__()
+        super().__init__()
         self.activation = activation
         self.use_curriculum = use_curriculum
         self.current_tau = 0.0
         self.latest_pde_loss = None
         self.latest_boundary_loss = None
-        
+
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
         for _ in range(n_layers - 1):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-        
+
         # GMM curriculum learning initialization
         gmm_kwargs = gmm_kwargs or {}
         self.curriculum_weight = GMMCurriculumWeight(**gmm_kwargs)
         self.sample_weights = None
-        
+
         # ReLoBRaLo initialization (2 loss terms: PDE, boundary)
         relobralo_kwargs = relobralo_kwargs or {}
         self.relobralo = ReLoBRaLoWeights(**relobralo_kwargs)
-    
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, y], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_laplacian(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
         u = self.forward(x, y)
-        
+
         u_x = torch.autograd.grad(
             outputs=u, inputs=x, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -715,7 +712,7 @@ class CGMPINN2D(nn.Module):
             outputs=u, inputs=y, grad_outputs=torch.ones_like(u),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         u_xx = torch.autograd.grad(
             outputs=u_x, inputs=x, grad_outputs=torch.ones_like(u_x),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -724,52 +721,52 @@ class CGMPINN2D(nn.Module):
             outputs=u_y, inputs=y, grad_outputs=torch.ones_like(u_y),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         laplacian_u = u_xx + u_yy
         return u_xx, u_yy, laplacian_u
-    
+
     def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_beta1pi_x = torch.sin(BETA1 * np.pi * x)
         sin_beta2pi_y = torch.sin(BETA2 * np.pi * y)
         exp_term = torch.exp(-x**2 - y**2)
-        
+
         laplacian_first = - (np.pi**2) * (BETA1**2 + BETA2**2) * sin_beta1pi_x * sin_beta2pi_y
         laplacian_second = 4 * (x**2 + y**2 - 1) * exp_term
-        
+
         f = laplacian_first + laplacian_second
         return f
-    
+
     def update_curriculum_weights(self, x: torch.Tensor, y: torch.Tensor) -> None:
         if not self.use_curriculum:
             return
         _, _, laplacian_u = self.compute_laplacian(x, y)
         pde_residual = laplacian_u - self.source_term(x, y)
         self.sample_weights = self.curriculum_weight.compute_weights(pde_residual, self.current_tau)
-    
+
     def set_training_progress(self, current_step: int, total_steps: int) -> None:
         if total_steps == 0:
             self.current_tau = 0.0
         else:
             tau_base = total_steps * self.curriculum_weight.tau_saturation
             self.current_tau = min(current_step / tau_base, 1.0)
-    
+
     def pde_loss(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         _, _, laplacian_u = self.compute_laplacian(x, y)
         f = self.source_term(x, y)
         pde_residual = laplacian_u - f
-        
+
         if self.use_curriculum and self.sample_weights is not None:
             weighted_residual = self.sample_weights.detach() * (pde_residual ** 2)
             pde_loss_val = torch.mean(weighted_residual)
         else:
             pde_loss_val = torch.mean(pde_residual ** 2)
-        
+
         self.latest_pde_loss = pde_loss_val.item()
         return pde_loss_val
-    
+
     def boundary_loss(self, boundary_data) -> torch.Tensor:
         x0, y0, x1, y1, x2, y2, x3, y3 = boundary_data
-        
+
         x0 = x0.to(next(self.parameters()).device)
         y0 = y0.to(next(self.parameters()).device)
         x1 = x1.to(next(self.parameters()).device)
@@ -778,42 +775,42 @@ class CGMPINN2D(nn.Module):
         y2 = y2.to(next(self.parameters()).device)
         x3 = x3.to(next(self.parameters()).device)
         y3 = y3.to(next(self.parameters()).device)
-        
+
         u0_pred = self.forward(x0, y0)
         u0_exact = self.analytical_solution(x0, y0)
-        
+
         u1_pred = self.forward(x1, y1)
         u1_exact = self.analytical_solution(x1, y1)
-        
+
         u2_pred = self.forward(x2, y2)
         u2_exact = self.analytical_solution(x2, y2)
-        
+
         u3_pred = self.forward(x3, y3)
         u3_exact = self.analytical_solution(x3, y3)
-        
+
         boundary_loss_val = torch.mean((u0_pred - u0_exact)**2 + (u1_pred - u1_exact)**2 +
                                       (u2_pred - u2_exact)**2 + (u3_pred - u3_exact)**2)
         self.latest_boundary_loss = boundary_loss_val.item()
         return boundary_loss_val
-    
+
     def compute_weighted_total_loss(self, pde_data, boundary_data) -> torch.Tensor:
         x_pde, y_pde = pde_data
-        
+
         pde_loss_val = self.pde_loss(x_pde, y_pde)
         boundary_loss_val = self.boundary_loss(boundary_data)
-        
+
         current_losses = [self.latest_pde_loss, self.latest_boundary_loss]
         self.relobralo.update(current_losses)
         weights = self.relobralo.weights.detach()
-        
+
         return weights[0] * pde_loss_val + weights[1] * boundary_loss_val
-    
+
     def analytical_solution(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         sin_part = torch.sin(BETA1 * np.pi * x) * torch.sin(BETA2 * np.pi * y)
         exp_part = torch.exp(-x**2 - y**2)
         return sin_part + exp_part
 
-#  Model Loading Function 
+#  Model Loading Function
 def load_pinn_model(model_class, model_kwargs, weight_path, device='cpu'):
     """
     Load a saved PINN (model parameters + loss history + training time).
@@ -870,12 +867,12 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
     model_names = ["PINN", "lbPINN", "gPINN", "LNN-PINN", "STAR-PINN", "CGMPINN"]
     x_test, y_test = test_data
     n_test = int(np.sqrt(len(x_test)))
-    
+
     # Reshape test data for plotting
     x_test_grid = x_test.numpy().reshape(n_test, n_test)
     y_test_grid = y_test.numpy().reshape(n_test, n_test)
     u_exact_grid = u_exact_np.reshape(n_test, n_test)
-    
+
     # 1. Loss Curve Comparison
     plt.figure(figsize=(12, 6))
     for i, loss_history in enumerate(loss_histories_list):
@@ -893,21 +890,21 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
     plt.tight_layout()
     save_figure("comparison_group_loss")
     plt.show()
-    
+
     # 2. Solution and Error Comparison (2D Heatmaps)
     n_models = min(len(solution_results_list), len(model_names))
     fig, axes = plt.subplots(n_models, 3, figsize=(18, 4 * n_models))
     # fig.suptitle("2D Poisson Equation - Solution Comparison", fontsize=16, y=0.98)
-    
+
     for idx in range(n_models):
         result = solution_results_list[idx]
         u_pred = result["u_pred"]
         pointwise_error = result["pointwise_error"]
-        
+
         # Reshape to grid
         u_pred_grid = u_pred.reshape(n_test, n_test)
         error_grid = pointwise_error.reshape(n_test, n_test)
-        
+
         # Predicted Solution
         ax1 = axes[idx, 0]
         im1 = ax1.pcolormesh(x_test_grid, y_test_grid, u_pred_grid, cmap=cm.jet, shading='gouraud')
@@ -915,7 +912,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
         ax1.set_ylabel("y", fontsize=10)
         ax1.set_title(f"{model_names[idx]} - Prediction", fontsize=12)
         plt.colorbar(im1, ax=ax1, shrink=0.8)
-        
+
         # Analytical Solution
         ax2 = axes[idx, 1]
         im2 = ax2.pcolormesh(x_test_grid, y_test_grid, u_exact_grid, cmap=cm.jet, shading='gouraud')
@@ -923,7 +920,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
         ax2.set_ylabel("y", fontsize=10)
         ax2.set_title("Analytical Solution", fontsize=12)
         plt.colorbar(im2, ax=ax2, shrink=0.8)
-        
+
         # Error Plot
         ax3 = axes[idx, 2]
         im3 = ax3.pcolormesh(x_test_grid, y_test_grid, error_grid, cmap=cm.viridis, shading='gouraud')
@@ -931,7 +928,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
         ax3.set_ylabel("y", fontsize=10)
         ax3.set_title(f"{model_names[idx]} - Absolute Error", fontsize=12)
         plt.colorbar(im3, ax=ax3, shrink=0.8)
-    
+
     plt.tight_layout()
     plt.subplots_adjust(top=0.93)
     save_figure("comparison_group_solution")
@@ -941,44 +938,42 @@ def plot_error_analysis_group(solution_results_list, test_data, model_names=None
     if model_names is None:
         model_names = ["PINN", "lbPINN", "gPINN", "LNN-PINN", "STAR-PINN", "CGMPINN"]
     n_models = min(len(solution_results_list), len(model_names))
-    
+
     x_test_flat, y_test_flat = test_data
     n_test = int(np.sqrt(len(x_test_flat)))
-    
+
     x_grid = x_test_flat.numpy().reshape(n_test, n_test)
     y_grid = y_test_flat.numpy().reshape(n_test, n_test)
-    x_vals = x_grid[:, 0]  
-    y_vals = y_grid[0, :]  
-    
+    x_vals = x_grid[:, 0]
+    y_vals = y_grid[0, :]
+
     fig, axes = plt.subplots(n_models, 3, figsize=(18, 4 * n_models))
     # fig.suptitle('Model Error Analysis (2D Poisson Equation)', fontsize=16, y=0.98)
-    
+
     for idx in range(n_models):
         result = solution_results_list[idx]
-        error_flat = result["pointwise_error"] 
-        l2_error = result["l2_error"]
-        linf_error = result["linf_error"]
+        error_flat = result["pointwise_error"]
         current_model = model_names[idx]
-        
+
         error_grid = error_flat.reshape(n_test, n_test)
-        
+
         error_mean_x = np.mean(error_grid, axis=1)
         error_max_x = np.max(error_grid, axis=1)
         error_min_x = np.min(error_grid, axis=1)
-        
+
         error_mean_y = np.mean(error_grid, axis=0)
         error_max_y = np.max(error_grid, axis=0)
         error_min_y = np.min(error_grid, axis=0)
-        
+
         ax1 = axes[idx, 0] if n_models > 1 else axes[0]
         ax2 = axes[idx, 1] if n_models > 1 else axes[1]
         ax3 = axes[idx, 2] if n_models > 1 else axes[2]
-        
-        ax1.hist(error_flat, bins=50, color='steelblue', 
+
+        ax1.hist(error_flat, bins=50, color='steelblue',
                  edgecolor='black', alpha=0.7, density=True)
-        ax1.axvline(error_flat.mean(), color='r', linestyle='--', 
+        ax1.axvline(error_flat.mean(), color='r', linestyle='--',
                     linewidth=2, label=f'Mean: {error_flat.mean():.2e}')
-        ax1.axvline(np.median(error_flat), color='orange', linestyle=':', 
+        ax1.axvline(np.median(error_flat), color='orange', linestyle=':',
                     linewidth=2, label=f'Median: {np.median(error_flat):.2e}')
         ax1.set_xlabel('Absolute Error', fontsize=12)
         ax1.set_ylabel('Probability Density', fontsize=12)
@@ -988,11 +983,11 @@ def plot_error_analysis_group(solution_results_list, test_data, model_names=None
         ax1.grid(True, alpha=0.3)
         x_formatter = ScalarFormatter(useMathText=True)
         x_formatter.set_scientific(True)
-        x_formatter.set_powerlimits((-2, 3))  
+        x_formatter.set_powerlimits((-2, 3))
         ax1.xaxis.set_major_formatter(x_formatter)
 
         ax2.plot(x_vals, error_mean_x, 'b-', linewidth=2, label='Mean Error')
-        ax2.fill_between(x_vals, error_min_x, error_max_x, 
+        ax2.fill_between(x_vals, error_min_x, error_max_x,
                          alpha=0.3, color='blue', label='Error Range')
         ax2.set_xlabel('Position $x$', fontsize=12)
         ax2.set_ylabel('Error (Log Scale)', fontsize=12)
@@ -1000,16 +995,16 @@ def plot_error_analysis_group(solution_results_list, test_data, model_names=None
         ax2.legend(fontsize=10)
         ax2.set_yscale('log')
         ax2.grid(True, alpha=0.3)
-        
+
         ax3.plot(y_vals, error_mean_y, 'g-', linewidth=2, label='Mean Error')
-        ax3.fill_between(y_vals, error_min_y, error_max_y, 
+        ax3.fill_between(y_vals, error_min_y, error_max_y,
                          alpha=0.3, color='green', label='Error Range')
         ax3.set_xlabel('Position $y$', fontsize=12)
         ax3.set_ylabel('Error', fontsize=12)
         ax3.set_title(f'{current_model} - Error Distribution', fontsize=13)
         ax3.legend(fontsize=10)
         ax3.grid(True, alpha=0.3)
-    
+
     plt.tight_layout()
     plt.subplots_adjust(top=0.93)
     save_figure("error_analysis_group")
@@ -1021,24 +1016,24 @@ def main():
     tanh_activation = TanhActivation()
     test_data = generate_test_data(N_TEST)
     x_test, y_test = test_data
-    device = torch.device("cpu") 
-    
+    device = torch.device("cpu")
+
     # Generate training data (used for loss calculation in demonstration)
     pde_data, boundary_data = generate_training_data()
-    
+
     # GMM and ReLoBRaLo parameters (2 loss terms: PDE, boundary)
     gmm_kwargs = {"n_components":4, "update_interval":200, "beta":1.0, "tau_saturation":0.8}
     relobralo_kwargs = {"n_losses":2, "alpha":0.999, "temperature":1.0, "rho":0.99, "device":device}
-    
+
     # 2. Calculate analytical solution (for comparison)
     temp_model = PINN2D(INPUT_DIM, OUTPUT_DIM, HIDDEN_DIM, N_LAYERS, tanh_activation)
     u_exact = temp_model.analytical_solution(x_test, y_test)
     u_exact_np = u_exact.numpy()
-    
+
     # 3. Construct weight file paths
     data_dir = PARAMETER_DIR
     os.makedirs(data_dir, exist_ok=True)
-    
+
     # Define loading configurations for each model
     model_load_configs = {
         "PINN": {
@@ -1113,12 +1108,12 @@ def main():
             "weight_path": os.path.join(data_dir, "2D_poisson_tanh_adam2lbfgs_cgmpinn.pth")
         }
     }
-    
+
     # 4. Load models, evaluate, and store results
     loss_histories = {}
     solution_results = {}
     run_times = {}
-    
+
     for model_name, config in model_load_configs.items():
         print(f"\n🔍 Loading model: {model_name}")
         model, aux_info = load_pinn_model(
@@ -1127,7 +1122,7 @@ def main():
             weight_path=config["weight_path"],
             device=device
         )
-        
+
         if model is None:
             u_pred_np = np.zeros_like(u_exact_np)
             pointwise_error = np.zeros_like(u_exact_np)
@@ -1142,11 +1137,11 @@ def main():
             x_test_device = x_test.to(device)
             y_test_device = y_test.to(device)
             u_exact_device = u_exact.to(device)
-            
+
             metrics = evaluate_model(model, (x_test_device, y_test_device), u_exact_device)
             l2_error, l2rel_error, linf_error, pointwise_error, u_pred_np = metrics
             loss_history = aux_info.get('loss_history', [])
-            
+
             # Process loss history
             if isinstance(loss_history, list) and len(loss_history) > 0:
                 first_item = loss_history[0]
@@ -1160,10 +1155,10 @@ def main():
             else:
                 # Generate simulated loss curve
                 loss_history = np.logspace(0, -4, 1000).tolist()
-            
+
             run_time = aux_info.get('training_time', 0.0)
             final_train_loss = aux_info.get('final_total_loss', float('inf'))
-        
+
         # Save data
         loss_histories[model_name] = loss_history
         run_times[model_name] = run_time
@@ -1175,7 +1170,7 @@ def main():
             "linf_error": linf_error,
             "final_train_loss": final_train_loss
         }
-    
+
     # 5. Plot comparison group
     group_losses = [
         loss_histories["PINN"],

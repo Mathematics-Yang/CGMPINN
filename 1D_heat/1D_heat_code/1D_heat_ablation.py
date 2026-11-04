@@ -5,7 +5,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from matplotlib import cm  
+from matplotlib import cm
 import matplotlib.pyplot as plt
 import time
 from sklearn.mixture import GaussianMixture
@@ -65,31 +65,31 @@ class AdaptiveLossWeights:
 
 class ReLoBRaLoWeights(AdaptiveLossWeights):
     """Helper for the ablation experiment."""
-    def __init__(self, n_losses=3, alpha=0.999, temperature=1.0, 
+    def __init__(self, n_losses=3, alpha=0.999, temperature=1.0,
                  rho=0.99, device='cpu'):
         super().__init__(n_losses, device)
         self.alpha = alpha
         self.temperature = temperature
         self.rho = rho
-        
+
         self.loss_history = [[] for _ in range(n_losses)]
         self.ema_losses = None
         self.initial_losses = None
-        
-    def update(self, losses, **kwargs):
+
+    def update(self, losses):
         """Helper for the ablation experiment."""
         losses_tensor = torch.tensor(losses, device=self.device, dtype=torch.float32)
-        
+
         for i, loss in enumerate(losses):
             self.loss_history[i].append(loss)
-        
+
         if self.initial_losses is None:
             self.initial_losses = losses_tensor.clone()
             self.ema_losses = losses_tensor.clone()
             return
-        
+
         self.ema_losses = self.alpha * self.ema_losses + (1 - self.alpha) * losses_tensor
-        
+
         if np.random.rand() < self.rho:
             reference = self.ema_losses
         else:
@@ -98,14 +98,14 @@ class ReLoBRaLoWeights(AdaptiveLossWeights):
                 [self.loss_history[i][lookback_idx] for i in range(self.n_losses)],
                 device=self.device, dtype=torch.float32
             )
-        
+
         relative_losses = losses_tensor / (reference + 1e-8)
-        
+
         scaled_losses = relative_losses / self.temperature
         self.weights = self.n_losses * torch.softmax(scaled_losses, dim=0)
 
 class GMMCurriculumWeight:
-    def __init__(self, n_components=4, update_interval=200, epsilon=1e-6, 
+    def __init__(self, n_components=4, update_interval=200, epsilon=1e-6,
                  beta=1.0,
                  tau_saturation=0.8,
                  use_variance_factor=False):
@@ -174,29 +174,29 @@ class GMMCurriculumWeight:
             return self.compute_cl_weights(residuals, tau)
         """Helper for the ablation experiment."""
         res_np = residuals.detach().cpu().numpy().reshape(-1, 1)
-        
+
         try:
             self.gmm.fit(res_np)
             gamma = self.gmm.predict_proba(res_np)
             sigma_sq = self.gmm.covariances_.flatten()
-            
+
             res_squared = res_np.flatten() ** 2
             component_difficulty = np.array([
                 np.sum(gamma[:, j] * res_squared) / (np.sum(gamma[:, j]) + self.epsilon)
                 for j in range(self.n_components)
             ])
-            
+
             diff_min, diff_max = component_difficulty.min(), component_difficulty.max()
             if diff_max - diff_min > self.epsilon:
                 normalized_diff = (component_difficulty - diff_min) / (diff_max - diff_min)
             else:
                 normalized_diff = np.zeros_like(component_difficulty)
-            
+
             easy_weight = np.exp(-self.beta * normalized_diff)
             hard_weight = np.exp(-self.beta * (1 - normalized_diff))
-            
+
             curriculum_weight = (1 - tau) * easy_weight + tau * hard_weight
-            
+
             if self.use_variance_factor:
                 variance_factor = 1 / (sigma_sq + self.epsilon)
                 variance_factor = variance_factor / variance_factor.max()
@@ -204,27 +204,27 @@ class GMMCurriculumWeight:
                 component_weights = curriculum_weight * effective_variance_factor
             else:
                 component_weights = curriculum_weight
-            
+
             point_weights = np.sum(gamma * component_weights[np.newaxis, :], axis=1)
             self._last_valid_weights = point_weights.copy()
-        
+
         except Exception as e:
             print(f"GMM training failed: {e}")
             if self._last_valid_weights is not None and len(self._last_valid_weights) == len(res_np):
                 point_weights = self._last_valid_weights
             else:
                 point_weights = np.ones(len(res_np))
-        
+
         point_weights = point_weights / (point_weights.mean() + self.epsilon)
-        
+
         return torch.tensor(point_weights.reshape(-1, 1), dtype=torch.float32).to(residuals.device)
 
 class CGMPINN(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation, 
+    def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation,
                  use_curriculum=True, gmm_kwargs=None,
                  use_relobralo=True, relobralo_kwargs=None,
                  weight_strategy='cgm'):
-        super(CGMPINN, self).__init__()
+        super().__init__()
         self.activation = activation
         self.weight_strategy = weight_strategy.lower()
         self.use_curriculum = use_curriculum and self.weight_strategy in {'gmm', 'cl', 'cgm'}
@@ -242,7 +242,7 @@ class CGMPINN(nn.Module):
             gmm_kwargs = gmm_kwargs or {}
             self.curriculum_weight = GMMCurriculumWeight(**gmm_kwargs)
             self.sample_weights = None
-        
+
         self.latest_pde_loss = None
         self.latest_initial_loss = None
         self.latest_boundary_loss = None
@@ -275,7 +275,7 @@ class CGMPINN(nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, t], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         u = self.forward(x, t)
         u_t = torch.autograd.grad(
@@ -291,24 +291,23 @@ class CGMPINN(nn.Module):
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
         return u_t, u_xx
-    
+
     def source_term(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """Helper for the ablation experiment."""
         sin_alpha1pi_x = torch.sin(ALPHA1 * np.pi * x)
         tanh_kx = torch.tanh(k * x)
         sin_alpha2pi_t = torch.sin(ALPHA2 * np.pi * t)
         cos_alpha2pi_t = torch.cos(ALPHA2 * np.pi * t)
-        
+
         u_t_exact = (sin_alpha1pi_x + tanh_kx) * ALPHA2 * np.pi * cos_alpha2pi_t
-        
+
         sech_kx_sq = 1 / (torch.cosh(k * x) ** 2)
-        u_x_exact = (ALPHA1 * np.pi * torch.cos(ALPHA1 * np.pi * x) + k * sech_kx_sq) * sin_alpha2pi_t
-        
+
         u_xx_exact = (
-            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x 
+            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x
             - 2 * (k ** 2) * sech_kx_sq * tanh_kx
         ) * sin_alpha2pi_t
-        
+
         f = u_t_exact - u_xx_exact
         return f
 
@@ -323,50 +322,50 @@ class CGMPINN(nn.Module):
             pde_loss_val = torch.mean(weighted_residual)
         else:
             pde_loss_val = torch.mean(pde_residual ** 2)
-        
+
         self.latest_pde_loss = pde_loss_val.item()
-        
+
         return pde_loss_val
-    
+
     def initial_loss(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         """Helper for the ablation experiment."""
         u_pred = self.forward(x, t0)
         u_exact = (torch.sin(ALPHA1 * np.pi * x) + torch.tanh(k * x)) * torch.sin(ALPHA2 * np.pi * t0)
         initial_residual = u_pred - u_exact
         initial_loss_val = torch.mean(initial_residual ** 2)
-        
+
         self.latest_initial_loss = initial_loss_val.item()
-        
+
         return initial_loss_val
-    
+
     def boundary_loss(self, t: torch.Tensor) -> torch.Tensor:
         """Helper for the ablation experiment."""
         x0 = torch.zeros_like(t)
         u0_pred = self.forward(x0, t)
         u0_exact = (torch.sin(ALPHA1 * np.pi * x0) + torch.tanh(k * x0)) * torch.sin(ALPHA2 * np.pi * t)
-        
+
         x1 = torch.ones_like(t)
         u1_pred = self.forward(x1, t)
         u1_exact = (torch.sin(ALPHA1 * np.pi * x1) + torch.tanh(k * x1)) * torch.sin(ALPHA2 * np.pi * t)
-        
+
         boundary_residual1 = u0_pred - u0_exact
         boundary_residual2 = u1_pred - u1_exact
         boundary_loss_val = torch.mean(boundary_residual1 ** 2) + torch.mean(boundary_residual2 ** 2)
-        
+
         self.latest_boundary_loss = boundary_loss_val.item()
-        
+
         return boundary_loss_val
-    
+
     def compute_weighted_total_loss(self, pde_data, initial_data, boundary_data) -> torch.Tensor:
         """Helper for the ablation experiment."""
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         pde_loss_val = self.pde_loss(x_pde, t_pde)
         initial_loss_val = self.initial_loss(x_initial, t_initial)
         boundary_loss_val = self.boundary_loss(t_boundary)
-        
+
         if self.use_relobralo:
             current_losses = [self.latest_pde_loss, self.latest_initial_loss, self.latest_boundary_loss]
             self.relobralo.update(current_losses)
@@ -378,18 +377,18 @@ class CGMPINN(nn.Module):
             )
         else:
             return pde_loss_val + initial_loss_val + boundary_loss_val
-    
+
     def final_total_loss(self, pde_data, initial_data, boundary_data) -> tuple[float, float, float, float]:
         """Helper for the ablation experiment."""
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         with torch.enable_grad():
             pde_loss_val = self.pde_loss(x_pde, t_pde).item()
             initial_loss_val = self.initial_loss(x_initial, t_initial).item()
             boundary_loss_val = self.boundary_loss(t_boundary).item()
-            
+
             if self.use_relobralo:
                 weights = self.relobralo.weights.detach().cpu().numpy()
                 total_loss_val = (
@@ -399,7 +398,7 @@ class CGMPINN(nn.Module):
                 )
             else:
                 total_loss_val = pde_loss_val + initial_loss_val + boundary_loss_val
-        
+
         return total_loss_val, pde_loss_val, initial_loss_val, boundary_loss_val
 
 def generate_data(
@@ -411,21 +410,21 @@ def generate_data(
     x_pde = torch.rand(n_pde, 1, requires_grad=True)
     t_pde = torch.rand(n_pde, 1, requires_grad=True)
     pde_data = (x_pde, t_pde)
-    
+
     x_initial = torch.rand(n_initial, 1, requires_grad=True)
     t_initial = torch.zeros_like(x_initial, requires_grad=True)
     initial_data = (x_initial, t_initial)
-    
+
     t_boundary = torch.rand(n_boundary, 1, requires_grad=True)
     boundary_data = t_boundary
-    
+
     x_test = torch.linspace(0, 1, n_test).reshape(-1, 1)
     t_test = torch.linspace(0, 1, n_test).reshape(-1, 1)
     x_test_grid, t_test_grid = torch.meshgrid(x_test.squeeze(), t_test.squeeze(), indexing='ij')
     x_test_flat = x_test_grid.reshape(-1, 1)
     t_test_flat = t_test_grid.reshape(-1, 1)
     test_data = (x_test_flat, t_test_flat)
-    
+
     return pde_data, initial_data, boundary_data, test_data
 
 def train_with_optimizer(
@@ -437,11 +436,10 @@ def train_with_optimizer(
     boundary_data: torch.Tensor,
     loss_history: list,
     step_offset: int = 0,
-    global_total_steps: int = None
+    global_total_steps: int | None = None
 ) -> int:
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
-    t_boundary = boundary_data
     model.train()
 
     if global_total_steps is None:
@@ -449,21 +447,21 @@ def train_with_optimizer(
 
     for epoch in range(epochs):
         global_step = step_offset + epoch + 1
-        
+
         model.set_training_progress(global_step, global_total_steps)
-        
+
         if model.use_curriculum and epoch % model.curriculum_weight.update_interval == 0:
             model.update_curriculum_weights(x_pde, t_pde)
             print(f"  -> Epoch {epoch+1} (global step {global_step}), curriculum tau={model.current_tau:.3f}")
 
         total_loss = model.compute_weighted_total_loss(pde_data, initial_data, boundary_data)
-        
+
         optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()
-        
+
         loss_history.append(total_loss.item())
-        
+
         if (epoch + 1) % 1000 == 0:
             curr_info = f" (tau={model.current_tau:.3f})" if model.use_curriculum else ""
             relobralo_info = ""
@@ -479,7 +477,7 @@ def train_with_optimizer(
                 f'Epoch {epoch+1:4d}{curr_info}{relobralo_info} | Total loss: {total_loss.item():.2e} | '
                 f'PDE loss: {pde_loss:.2e} | IC loss: {initial_loss:.2e} | BC loss: {boundary_loss:.2e}'
             )
-    
+
     return step_offset + epochs
 
 def train_with_lbfgs(
@@ -491,11 +489,10 @@ def train_with_lbfgs(
     lr: float,
     max_iter: int,
     step_offset: int = 0,
-    global_total_steps: int = None
+    global_total_steps: int | None = None
 ) -> int:
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
-    t_boundary = boundary_data
     model.train()
 
     if global_total_steps is None:
@@ -511,11 +508,11 @@ def train_with_lbfgs(
         optimizer.zero_grad()
         total_loss = model.compute_weighted_total_loss(pde_data, initial_data, boundary_data)
         total_loss.backward()
-        
+
         pde_loss_val = model.latest_pde_loss if model.latest_pde_loss is not None else 0.0
         initial_loss_val = model.latest_initial_loss if model.latest_initial_loss is not None else 0.0
         boundary_loss_val = model.latest_boundary_loss if model.latest_boundary_loss is not None else 0.0
-        
+
         return total_loss
 
     optimizer = optim.LBFGS(
@@ -525,9 +522,9 @@ def train_with_lbfgs(
 
     for iter_idx in range(max_iter):
         global_step = step_offset + iter_idx + 1
-        
+
         model.set_training_progress(global_step, global_total_steps)
-        
+
         total_loss = optimizer.step(closure)
 
         if model.use_curriculum and (iter_idx % model.curriculum_weight.update_interval == 0):
@@ -546,7 +543,7 @@ def train_with_lbfgs(
                 f'Iteration {iter_idx+1}/{max_iter}{curr_info}{relobralo_info} | Total loss: {total_loss.item():.2e} | '
                 f'PDE loss: {pde_loss_val:.2e} | IC loss: {initial_loss_val:.2e} | BC loss: {boundary_loss_val:.2e}'
             )
-    
+
     return step_offset + max_iter
 
 def train_adam_lbfgs(
@@ -560,33 +557,33 @@ def train_adam_lbfgs(
     lbfgs_max_iter: int
 ) -> None:
     global_total_steps = adam_epochs + lbfgs_max_iter
-    
+
     print("\n=== Stage 1: Adam global exploration (starting from easy samples) ===")
     print(f"    Global step range: 1 ~ {adam_epochs}, tau: 0 -> {adam_epochs/global_total_steps:.3f}")
-    
+
     optimizer_adam = optim.Adam(model.parameters(), lr=0.001)
     current_step = train_with_optimizer(
-        model=model, 
-        optimizer=optimizer_adam, 
+        model=model,
+        optimizer=optimizer_adam,
         epochs=adam_epochs,
-        pde_data=pde_data, 
-        initial_data=initial_data, 
+        pde_data=pde_data,
+        initial_data=initial_data,
         boundary_data=boundary_data,
         loss_history=loss_history,
         step_offset=0,
         global_total_steps=global_total_steps
     )
-    
+
     print("\n=== Stage 2: L-BFGS local refinement (gradually focusing on hard samples) ===")
     print(f"    Global step range: {current_step+1} ~ {global_total_steps}, tau: {current_step/global_total_steps:.3f} -> 1.0")
-    
+
     train_with_lbfgs(
-        model=model, 
-        pde_data=pde_data, 
-        initial_data=initial_data, 
+        model=model,
+        pde_data=pde_data,
+        initial_data=initial_data,
         boundary_data=boundary_data,
-        loss_history=loss_history, 
-        lr=lr_lbfgs, 
+        loss_history=loss_history,
+        lr=lr_lbfgs,
         max_iter=lbfgs_max_iter,
         step_offset=current_step,
         global_total_steps=global_total_steps
@@ -674,19 +671,19 @@ def plot_combined(activation_loss_histories: dict, activation_results: dict,
     x_grid = x_test.reshape(n_test, n_test).detach().cpu().numpy()
     t_grid = t_test.reshape(n_test, n_test).detach().cpu().numpy()
     u_exact_grid = u_exact_np.reshape(n_test, n_test)
-    
+
     fig, axes = plt.subplots(1, 4, figsize=(32, 6))
     ax_loss, ax_pred, ax_exact, ax_error = axes
-    
+
     color_palette = {
         'optimizers': ['#e74c3c', '#3498db', '#27ae60'],
     }
     line_styles = ['-', '--', '-.']
     markers = ['o', 's', '^']
-    for act_idx, (activation_name, loss_histories) in enumerate(activation_loss_histories.items()):
+    for loss_histories in activation_loss_histories.values():
         for opt_idx, (loss_history, label) in enumerate(zip(loss_histories, optim_labels)):
             marker_interval = max(1, len(loss_history) // 8)
-            ax_loss.plot(loss_history, label=f'{label}', 
+            ax_loss.plot(loss_history, label=f'{label}',
                          color=color_palette['optimizers'][opt_idx], linestyle=line_styles[opt_idx],
                          marker=markers[opt_idx], markevery=marker_interval, markersize=6,
                          linewidth=2, alpha=0.9)
@@ -698,34 +695,34 @@ def plot_combined(activation_loss_histories: dict, activation_results: dict,
     ax_loss.tick_params(axis='both', labelsize=10)
     ax_loss.spines['top'].set_visible(False)
     ax_loss.spines['right'].set_visible(False)
-    
-    main_activation = list(activation_results.keys())[0]
+
+    main_activation = next(iter(activation_results))
     adam2lbfgs_res = activation_results[main_activation]['CGM']
     u_pred = adam2lbfgs_res['u_pred']
     u_pred_grid = u_pred.reshape(n_test, n_test)
     error_grid = np.abs(u_pred_grid - u_exact_grid)
-    
+
     im_pred = ax_pred.pcolormesh(t_grid, x_grid, u_pred_grid, cmap=cm.jet, shading='gouraud')
     ax_pred.set_xlabel('Time $t$', fontsize=12)
     ax_pred.set_ylabel('Position $x$', fontsize=12)
-    ax_pred.set_title(f'(b) CGM Prediction', fontsize=14, pad=10)
+    ax_pred.set_title('(b) CGM Prediction', fontsize=14, pad=10)
     plt.colorbar(im_pred, ax=ax_pred, shrink=0.8, aspect=20, pad=0.02)
     ax_pred.tick_params(axis='both', labelsize=10)
-    
+
     im_exact = ax_exact.pcolormesh(t_grid, x_grid, u_exact_grid, cmap=cm.jet, shading='gouraud')
     ax_exact.set_xlabel('Time $t$', fontsize=12)
     ax_exact.set_ylabel('Position $x$', fontsize=12)
     ax_exact.set_title('(c) Exact Solution', fontsize=14, pad=10)
     plt.colorbar(im_exact, ax=ax_exact, shrink=0.8, aspect=20, pad=0.02)
     ax_exact.tick_params(axis='both', labelsize=10)
-    
+
     im_error = ax_error.pcolormesh(t_grid, x_grid, error_grid, cmap=cm.RdBu_r, shading='gouraud')
     ax_error.set_xlabel('Time $t$', fontsize=12)
     ax_error.set_ylabel('Position $x$', fontsize=12)
     ax_error.set_title('(d) Absolute Error Distribution', fontsize=14, pad=10)
     plt.colorbar(im_error, ax=ax_error, shrink=0.8, aspect=20, pad=0.02)
     ax_error.tick_params(axis='both', labelsize=10)
-    
+
     plt.tight_layout()
     plt.subplots_adjust(top=0.90, wspace=0.20)
     save_figure("combined")
@@ -861,7 +858,7 @@ def run_1D_heat_ablation():
     print("=" * 140)
     print(f"{'Activation':<12} {'Method':<12} {'TrainTime(s)':<14} {'L2Error':<12} {'RelL2Error':<12} {'LinfError':<12} {'FinalTotalLoss':<14}")
     print("-" * 140)
-    for activation_name in activations.keys():
+    for activation_name in activations:
         for idx, method_name in enumerate(method_labels):
             results = activation_results[activation_name][method_name]
             train_time = activation_training_times[activation_name][idx]

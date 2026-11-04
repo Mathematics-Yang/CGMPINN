@@ -35,10 +35,10 @@ class TanhActivation(nn.Module):
     def forward(self, x):
         return torch.tanh(x)
 
-# define equation parameters 
-ALPHA1 = 5.0  
-ALPHA2 = 3.0  
-k = 20.0      
+# define equation parameters
+ALPHA1 = 5.0
+ALPHA2 = 3.0
+k = 20.0
 
 # LNN-PINN Liquid Residual Gated Block
 class LiquidResidualBlock(nn.Module):
@@ -48,12 +48,12 @@ class LiquidResidualBlock(nn.Module):
     Structure: Linear -> Activation -> Gated Fusion -> Residual Connection
     """
     def __init__(self, hidden_dim, activation):
-        super(LiquidResidualBlock, self).__init__()
+        super().__init__()
         self.hidden_dim = hidden_dim
-        self.activation = activation  
-        self.linear = nn.Linear(hidden_dim, hidden_dim)  
-        
-        # Learnable gating parameters 
+        self.activation = activation
+        self.linear = nn.Linear(hidden_dim, hidden_dim)
+
+        # Learnable gating parameters
         self.alpha = nn.Parameter(torch.ones(1, hidden_dim) * 0.9)  # old information weight
         self.beta = nn.Parameter(torch.ones(1, hidden_dim) * 0.1)   # new information weight
         self.softplus = nn.Softplus()  # Ensure gating parameters are non-negative
@@ -61,26 +61,26 @@ class LiquidResidualBlock(nn.Module):
     def forward(self, x):
         # 1. Original input residual (retain old information)
         residual = x
-        
+
         # 2. Linear transformation + activation (extract new features)
         new_features = self.linear(x)
         new_features = self.activation(new_features)
-        
+
         # 3. Liquid gated fusion (adaptively regulate old/new information ratio)
-        alpha = self.softplus(self.alpha)  
-        beta = self.softplus(self.beta)   
+        alpha = self.softplus(self.alpha)
+        beta = self.softplus(self.beta)
         gated_features = alpha * residual + beta * new_features
-        
+
         # 4. Residual connection (final output, ensure training stability)
         output = self.activation(gated_features)
-        
+
         return output
 
 # LNN-PINN model
 class LNN_PINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(LNN_PINN, self).__init__()
-        self.activation = activation  
+        super().__init__()
+        self.activation = activation
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         self.input_layer = nn.Linear(input_dim, hidden_dim)
@@ -88,7 +88,7 @@ class LNN_PINN(nn.Module):
         for _ in range(n_layers - 1):
             self.hidden_blocks.append(LiquidResidualBlock(hidden_dim, activation))
         self.output_layer = nn.Linear(hidden_dim, output_dim)
-    
+
     # Forward propagation
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.input_layer(x)
@@ -135,7 +135,7 @@ class LNN_PINN(nn.Module):
         f_exact = self.source_term(x)
         pde_residual = u_xx_pred - f_exact
         return torch.mean(pde_residual ** 2)
-    
+
     def boundary_loss(self) -> torch.Tensor:
         x0 = torch.tensor([[0.0]], requires_grad=True)
         u0_pred = self.forward(x0)
@@ -145,32 +145,32 @@ class LNN_PINN(nn.Module):
         u1_exact = self.analytical_solution(x1)
         boundary_residual = (u0_pred - u0_exact)**2 + (u1_pred - u1_exact)**2
         return torch.mean(boundary_residual)
-    
+
     # analytical solution
     def analytical_solution(self, x: torch.Tensor) -> torch.Tensor:
         return torch.sin(ALPHA1 * np.pi * x) * torch.cos(ALPHA2 * np.pi * x) + torch.tanh(k * x)
-    
+
     # compute final total loss
     def final_total_loss(self, pde_data) -> tuple[float, float, float]:
         x_pde = pde_data
-        
+
         with torch.enable_grad():
             pde_loss_val = self.pde_loss(x_pde).item()
             boundary_loss_val = self.boundary_loss().item()
             total_loss_val = pde_loss_val + boundary_loss_val
-        
+
         return total_loss_val, pde_loss_val, boundary_loss_val
 
 # 2. generate training and testing data
 def generate_data(
     n_pde: int,
-    n_test: int 
+    n_test: int
 ) -> tuple:
     x_pde = torch.rand(n_pde, 1, requires_grad=True)
     pde_data = x_pde
     x_test = torch.linspace(0.0, 1.0, n_test).reshape(-1, 1)
     test_data = x_test
-    
+
     return pde_data, test_data
 
 # 3. training function (Adam)
@@ -187,13 +187,13 @@ def train_with_optimizer(
         pde_loss = model.pde_loss(pde_data)
         boundary_loss = model.boundary_loss()
         total_loss = pde_loss + boundary_loss
-        
+
         optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()
-        
+
         loss_history.append(total_loss.item())
-        
+
         if (epoch + 1) % 1000 == 0:
             print(
                 f'Epoch {epoch+1:4d} | Total Loss: {total_loss.item():.2e} | '
@@ -218,11 +218,11 @@ def train_with_lbfgs(
         boundary_loss = model.boundary_loss()
         total_loss = pde_loss + boundary_loss
         total_loss.backward()
-        
+
         pde_loss_val = pde_loss.item()
         boundary_loss_val = boundary_loss.item()
         return total_loss
-    
+
     optimizer = optim.LBFGS(
         model.parameters(),
         max_iter=1,
@@ -230,12 +230,12 @@ def train_with_lbfgs(
         line_search_fn='strong_wolfe',
         lr=lr
     )
-    
+
     for iter_idx in range(max_iter):
         total_loss = optimizer.step(closure)
         current_loss = total_loss.item()
         loss_history.append(current_loss)
-        
+
         if (iter_idx + 1) % 500 == 0 or iter_idx == 0:
             print(
                 f'Iteration {iter_idx+1}/{max_iter} | Total Loss: {current_loss:.2e} | '
@@ -260,7 +260,7 @@ def train_adam_lbfgs(
         pde_data=pde_data,
         loss_history=loss_history
     )
-    
+
     print("\n=== Stage 2: L-BFGS Local Refinement ===")
     train_with_lbfgs(
         model=model,
@@ -280,21 +280,21 @@ def evaluate_model(
     model.eval()
     with torch.no_grad():
         u_pred = model(x_test)
-        
+
         # Standard L2 error
         l2_error = torch.sqrt(torch.mean((u_pred - u_exact) ** 2)).item()
-        
+
         # L2 relative error
         u_exact_l2_norm = torch.sqrt(torch.mean(u_exact ** 2)).item()
         l2_relative_error = l2_error / u_exact_l2_norm if u_exact_l2_norm > 1e-10 else float('inf')
-        
+
         # L∞ error (maximum absolute error)
         linf_error = torch.max(torch.abs(u_pred - u_exact)).item()
-        
+
         # Pointwise error and predictions
         pointwise_error = torch.abs(u_pred - u_exact).numpy()
         u_pred_np = u_pred.numpy()
-    
+
     return l2_error, l2_relative_error, linf_error, pointwise_error, u_pred_np
 
 # 7. visualization functions
@@ -320,15 +320,15 @@ def plot_solutions_by_activation_and_optimizer(
     optim_labels: list
 ) -> None:
     x_test_np = test_data.numpy()
-    
+
     for activation_name, results in activation_results.items():
         fig, axes = plt.subplots(len(optim_labels), 2, figsize=(14, 4*len(optim_labels)))
         fig.suptitle(f'Solution Comparison - Activation: {activation_name}', fontsize=18, y=0.98)
-        
+
         for idx, optim_label in enumerate(optim_labels):
             u_pred = results[optim_label]['u_pred']
             pointwise_error = results[optim_label]['pointwise_error']
-            
+
             # Solution comparison
             ax1 = axes[idx, 0] if len(optim_labels) > 1 else axes[0]
             ax1.plot(x_test_np, u_exact_np, 'b-', label='Analytical Solution', linewidth=2)
@@ -338,7 +338,7 @@ def plot_solutions_by_activation_and_optimizer(
             ax1.set_title(f'{optim_label} - Solution', fontsize=12)
             ax1.legend(fontsize=9)
             ax1.grid(True, alpha=0.3)
-            
+
             # Pointwise error
             ax2 = axes[idx, 1] if len(optim_labels) > 1 else axes[1]
             ax2.plot(x_test_np, pointwise_error, 'g-', linewidth=2)
@@ -346,7 +346,7 @@ def plot_solutions_by_activation_and_optimizer(
             ax2.set_ylabel('Absolute Error', fontsize=10)
             ax2.set_title(f'{optim_label} - Pointwise Error', fontsize=12)
             ax2.grid(True, alpha=0.3)
-        
+
         plt.tight_layout()
         plt.subplots_adjust(top=0.93)
         save_figure(f"solutions_{activation_name}")
@@ -355,51 +355,51 @@ def plot_solutions_by_activation_and_optimizer(
 # 8. main function
 def train_1D_poisson_LNN_PINN_with_activations_and_source_term():
     # 1. hyperparameter settings
-    n_layers = 4              
-    input_dim = 1             
-    output_dim = 1            
-    hidden_dim = 50           
-    n_pde = 1500           
-    n_test = 200             
-    lr_lbfgs_config = {'Tanh': 1.0} 
-    lr_adam_lbfgs = 0.8      
-    epochs_adam = 15000      
-    max_iter_lbfgs = 15000   
-    adam_lbfgs_adam_epochs = 5000    
-    adam_lbfgs_lbfgs_iter = 10000    
-    
+    n_layers = 4
+    input_dim = 1
+    output_dim = 1
+    hidden_dim = 50
+    n_pde = 1500
+    n_test = 200
+    lr_lbfgs_config = {'Tanh': 1.0}
+    lr_adam_lbfgs = 0.8
+    epochs_adam = 15000
+    max_iter_lbfgs = 15000
+    adam_lbfgs_adam_epochs = 5000
+    adam_lbfgs_lbfgs_iter = 10000
+
     # Activation function dictionary
     activations = {'Tanh': TanhActivation()}
     activation_names = list(activations.keys())
     optim_labels = ['Adam (LNN-PINN)', 'L-BFGS (LNN-PINN)', 'Adam→L-BFGS (LNN-PINN)']
-    
-    # 2. Generate data 
+
+    # 2. Generate data
     print("Generating training and testing data...")
     pde_data, test_data = generate_data(
         n_pde=n_pde,
         n_test=n_test
     )
-    
+
     # Calculate exact solution
     model_temp = LNN_PINN(input_dim, output_dim, hidden_dim, 1, TanhActivation())
     u_exact = model_temp.analytical_solution(test_data)
     u_exact_np = u_exact.numpy()
-    
+
     # 3. Initialize storage variables
     activation_loss_histories = {}
     activation_results = {}
     activation_training_times = {}
-    
+
     # 4. Train all optimizers for each activation function
     for activation_name, activation_fn in activations.items():
         print("\n" + "="*80)
         print(f"Starting training - Activation: {activation_name} | Equation parameters: α1={ALPHA1}, α2={ALPHA2}, k={k}")
         print("="*80)
-        
+
         current_loss_histories = []
         current_results = {}
         current_training_times = []
-        
+
         # 4.1 Adam training
         print(f"\n--- {activation_name} + Adam ---")
         model_adam = LNN_PINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn)
@@ -415,7 +415,7 @@ def train_1D_poisson_LNN_PINN_with_activations_and_source_term():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate Adam
         l2_err, l2_rel_err, linf_err, pointwise_err, u_pred = evaluate_model(model_adam, test_data, u_exact)
         final_total, final_pde, final_boundary = model_adam.final_total_loss(pde_data)
@@ -431,7 +431,7 @@ def train_1D_poisson_LNN_PINN_with_activations_and_source_term():
         }
         current_loss_histories.append(loss_history_adam)
         print(f"Adam training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.2 L-BFGS training
         print(f"\n--- {activation_name} + L-BFGS ---")
         model_lbfgs = LNN_PINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn)
@@ -446,7 +446,7 @@ def train_1D_poisson_LNN_PINN_with_activations_and_source_term():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate L-BFGS
         l2_err, l2_rel_err, linf_err, pointwise_err, u_pred = evaluate_model(model_lbfgs, test_data, u_exact)
         final_total, final_pde, final_boundary = model_lbfgs.final_total_loss(pde_data)
@@ -462,7 +462,7 @@ def train_1D_poisson_LNN_PINN_with_activations_and_source_term():
         }
         current_loss_histories.append(loss_history_lbfgs)
         print(f"L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.3 Adam→L-BFGS training
         print(f"\n--- {activation_name} + Adam→L-BFGS ---")
         model_adam_lbfgs = LNN_PINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn)
@@ -478,7 +478,7 @@ def train_1D_poisson_LNN_PINN_with_activations_and_source_term():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate Adam→L-BFGS
         l2_err, l2_rel_err, linf_err, pointwise_err, u_pred = evaluate_model(model_adam_lbfgs, test_data, u_exact)
         final_total, final_pde, final_boundary = model_adam_lbfgs.final_total_loss(pde_data)
@@ -493,40 +493,40 @@ def train_1D_poisson_LNN_PINN_with_activations_and_source_term():
             'pointwise_error': pointwise_err
         }
         current_loss_histories.append(loss_history_adam_lbfgs)
-        if activation_name == 'Tanh':  
+        if activation_name == 'Tanh':
             # Define save path
             save_path = os.path.join(PARAMETER_DIR, "1D_poisson_tanh_adam2lbfgs_lnn_pinn.pth")
             os.makedirs(PARAMETER_DIR, exist_ok=True)
-    
+
             # Pack all contents to save
             complete_save_dict = {
                 'model_state_dict': model_adam_lbfgs.state_dict(),  # Model learnable parameters (core)
                 'loss_history': loss_history_adam_lbfgs,            # Loss history
                 'final_total_loss': final_total,                    # Final total loss
                 'training_time': train_time,                        # Training time
-                'activation_name': activation_name,                 # Additional info 
-                'hyper_parameters': {                               # Hyperparameters 
+                'activation_name': activation_name,                 # Additional info
+                'hyper_parameters': {                               # Hyperparameters
                     'n_layers': n_layers,
                     'hidden_dim': hidden_dim,
                     'adam_epochs': adam_lbfgs_adam_epochs,
                     'lbfgs_max_iter': adam_lbfgs_lbfgs_iter
                 }
             }
-    
+
             # Save custom dictionary
             torch.save(complete_save_dict, save_path)
             print(f"✅ Tanh+Adam→LBFGS complete information saved to: {save_path}")
         print(f"Adam→L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # Save current activation function results
         activation_loss_histories[activation_name] = current_loss_histories
         activation_results[activation_name] = current_results
         activation_training_times[activation_name] = current_training_times
-    
+
     # 5. Result visualization
     plot_loss_curves_by_activation(activation_loss_histories, optim_labels)
     plot_solutions_by_activation_and_optimizer(activation_results, test_data, u_exact_np, optim_labels)
-    
+
     # 6. Print comprehensive comparison table
     print("\n" + "="*120)
     print("Comprehensive comparison table for all activation functions × optimizers (1D Poisson equation - LNN-PINN)")
@@ -548,7 +548,7 @@ def train_1D_poisson_LNN_PINN_with_activations_and_source_term():
                 f"{results['linf_error']:<12.2e} "
                 f"{results['final_total_loss']:<12.2e}"
             )
-    
+
     # 7. Print best performance for each activation function
     print("\n" + "="*100)
     print("Best performance for each activation function (sorted by standard L2 error - LNN-PINN)")

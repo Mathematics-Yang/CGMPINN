@@ -87,7 +87,7 @@ Create a Python environment and install the required packages:
 pip install numpy torch matplotlib scikit-learn scipy
 ```
 
-If you use CUDA, install the PyTorch build that matches your GPU and CUDA version from the official PyTorch website.
+If you use CUDA, install the PyTorch build that matches your GPU and CUDA version from the official PyTorch website. Note that the scripts run on the CPU by default (all tensors are created on the CPU).
 
 ## Quick Start
 

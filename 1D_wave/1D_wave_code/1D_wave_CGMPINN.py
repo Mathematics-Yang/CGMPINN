@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from matplotlib import cm  
+from matplotlib import cm
 import matplotlib.pyplot as plt
 import time
 from sklearn.mixture import GaussianMixture
@@ -40,10 +40,10 @@ class TanhActivation(nn.Module):
         return torch.tanh(x)
 
 # define equation parameters
-ALPHA1 = 1.0    
-ALPHA2 = 1.0    
-GAMMA = 0.1     
-BETA = GAMMA   
+ALPHA1 = 1.0
+ALPHA2 = 1.0
+GAMMA = 0.1
+BETA = GAMMA
 c = np.sqrt(GAMMA**2 + (ALPHA2 * np.pi)**2) / (ALPHA1 * np.pi)
 
 # adaptive loss weights base class
@@ -62,38 +62,38 @@ class ReLoBRaLoWeights(AdaptiveLossWeights):
     ReLoBRaLo: Relative Loss Balancing with Random Lookback
     Adaptive weights based on loss change rates
     """
-    def __init__(self, n_losses=3, alpha=0.999, temperature=1.0, 
+    def __init__(self, n_losses=3, alpha=0.999, temperature=1.0,
                  rho=0.99, device='cpu'):
         super().__init__(n_losses, device)
         self.alpha = alpha           # exponential moving average coefficient
         self.temperature = temperature  # softmax temperature
         self.rho = rho               # random lookback probability
-        
+
         # store historical losses
         self.loss_history = [[] for _ in range(n_losses)]
         self.ema_losses = None  # exponential moving average losses
         self.initial_losses = None  # initial losses (for normalization)
-        
-    def update(self, losses, **kwargs):
+
+    def update(self, losses):
         """
         Update weights
         :param losses: current list of loss values [pde_loss, initial_loss, boundary_loss]
         """
         losses_tensor = torch.tensor(losses, device=self.device, dtype=torch.float32)
-        
+
         # record history
         for i, loss in enumerate(losses):
             self.loss_history[i].append(loss)
-        
+
         # initialize
         if self.initial_losses is None:
             self.initial_losses = losses_tensor.clone()
             self.ema_losses = losses_tensor.clone()
             return
-        
+
         # update EMA losses
         self.ema_losses = self.alpha * self.ema_losses + (1 - self.alpha) * losses_tensor
-        
+
         # compute relative loss change rates
         # random lookback: use EMA with probability rho, otherwise use current value
         if np.random.rand() < self.rho:
@@ -105,17 +105,17 @@ class ReLoBRaLoWeights(AdaptiveLossWeights):
                 [self.loss_history[i][lookback_idx] for i in range(self.n_losses)],
                 device=self.device, dtype=torch.float32
             )
-        
+
         # compute relative change rates
         relative_losses = losses_tensor / (reference + 1e-8)
-        
+
         # compute weights using softmax
         scaled_losses = relative_losses / self.temperature
         self.weights = self.n_losses * torch.softmax(scaled_losses, dim=0)
 
 # GMM weight calculation utility class
 class GMMCurriculumWeight:
-    def __init__(self, n_components=4, update_interval=200, epsilon=1e-6, 
+    def __init__(self, n_components=4, update_interval=200, epsilon=1e-6,
                  beta=1.0, tau_saturation=0.8, use_variance_factor=False):
         """
         Initialize GMM curriculum learning weight calculator (from easy to hard)
@@ -127,7 +127,7 @@ class GMMCurriculumWeight:
         self.tau_saturation = tau_saturation
         self.use_variance_factor = use_variance_factor
         self.gmm = GaussianMixture(n_components=n_components, random_state=1224)
-        self._last_valid_weights = None  
+        self._last_valid_weights = None
 
     def compute_weights(self, residuals: torch.Tensor, tau: float) -> torch.Tensor:
         """
@@ -137,34 +137,34 @@ class GMMCurriculumWeight:
         :return: weight tensor for each collocation point (n_pde, 1)
         """
         res_np = residuals.detach().cpu().numpy().reshape(-1, 1)
-        
+
         try:
             # 1. GMM fit residual distribution
             self.gmm.fit(res_np)
             gamma = self.gmm.predict_proba(res_np)  # (n_pde, K) posterior probabilities
             sigma_sq = self.gmm.covariances_.flatten()  # (K,) variances of components
-            
+
             # 2. Compute component difficulty weighted by posterior probabilities
             res_squared = res_np.flatten() ** 2
             component_difficulty = np.array([
                 np.sum(gamma[:, j] * res_squared) / (np.sum(gamma[:, j]) + self.epsilon)
                 for j in range(self.n_components)
             ])
-            
+
             # 3. Normalize difficulty to [0, 1]
             diff_min, diff_max = component_difficulty.min(), component_difficulty.max()
             if diff_max - diff_min > self.epsilon:
                 normalized_diff = (component_difficulty - diff_min) / (diff_max - diff_min)
             else:
                 normalized_diff = np.zeros_like(component_difficulty)
-            
+
             # 4. Curriculum learning weights
             easy_weight = np.exp(-self.beta * normalized_diff)  # easy sample weights
             hard_weight = np.exp(-self.beta * (1 - normalized_diff))  # hard sample weights
-            
+
             # 5. Smooth transition controlled by tau (from easy to hard)
             curriculum_weight = (1 - tau) * easy_weight + tau * hard_weight
-            
+
             # 6. Optional variance factor
             if self.use_variance_factor:
                 variance_factor = 1 / (sigma_sq + self.epsilon)
@@ -173,11 +173,11 @@ class GMMCurriculumWeight:
                 component_weights = curriculum_weight * effective_variance_factor
             else:
                 component_weights = curriculum_weight
-            
+
             # 7. Sample weights = weighted sum of posterior probabilities × component weights
             point_weights = np.sum(gamma * component_weights[np.newaxis, :], axis=1)
             self._last_valid_weights = point_weights.copy()
-        
+
         except Exception as e:
             print(f"GMM training failed: {e}")
             # Exception handling: use last valid weights or all ones
@@ -185,22 +185,22 @@ class GMMCurriculumWeight:
                 point_weights = self._last_valid_weights
             else:
                 point_weights = np.ones(len(res_np))
-        
+
         # 8. Normalize weights (ensure mean is 1)
         point_weights = point_weights / (point_weights.mean() + self.epsilon)
-        
+
         # Convert to torch tensor and return
         return torch.tensor(point_weights.reshape(-1, 1), dtype=torch.float32).to(residuals.device)
 
 # CGMPINN model
 class CGMPINN(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation, 
+    def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation,
                  use_curriculum=True, gmm_kwargs=None,
                  use_relobralo=True, relobralo_kwargs=None):
-        super(CGMPINN, self).__init__()
+        super().__init__()
         self.activation = activation
-        self.use_curriculum = use_curriculum  
-        self.use_relobralo = use_relobralo    
+        self.use_curriculum = use_curriculum
+        self.use_relobralo = use_relobralo
         self.total_train_steps = 0  # Total training steps
         self.current_tau = 0.0      # Current training progress
 
@@ -216,7 +216,7 @@ class CGMPINN(nn.Module):
             gmm_kwargs = gmm_kwargs or {}
             self.curriculum_weight = GMMCurriculumWeight(**gmm_kwargs)
             self.sample_weights = None
-        
+
         # Cache latest component loss values
         self.latest_pde_loss = None
         self.latest_initial_loss = None
@@ -230,9 +230,9 @@ class CGMPINN(nn.Module):
             self.relobralo = ReLoBRaLoWeights(**relobralo_kwargs)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        input_tensor = torch.cat([x, t], dim=1)  
+        input_tensor = torch.cat([x, t], dim=1)
         return self.layers(input_tensor)
-    
+
     def update_curriculum_weights(self, x: torch.Tensor, t: torch.Tensor) -> None:
         if not self.use_curriculum:
             return
@@ -245,10 +245,10 @@ class CGMPINN(nn.Module):
             self.current_tau = 0.0
         else:
             tau_base = total_steps * self.curriculum_weight.tau_saturation if self.use_curriculum else total_steps
-            self.current_tau = min(current_step / tau_base, 1.0)  
+            self.current_tau = min(current_step / tau_base, 1.0)
 
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        u = self.forward(x, t) 
+        u = self.forward(x, t)
         u_t = torch.autograd.grad(
             outputs=u,
             inputs=t,
@@ -281,7 +281,7 @@ class CGMPINN(nn.Module):
             retain_graph=True,
             only_inputs=True
         )[0]
-        
+
         return u_t, u_tt, u_x, u_xx
 
     def pde_loss(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -293,26 +293,26 @@ class CGMPINN(nn.Module):
             pde_loss_val = torch.mean(weighted_residual)
         else:
             pde_loss_val = torch.mean(pde_residual ** 2)
-        
+
         self.latest_pde_loss = pde_loss_val.item()
-        
+
         return pde_loss_val
-    
+
     def initial_loss(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         u_pred = self.forward(x, t0)
         u0_exact = torch.sin(ALPHA1 * np.pi * x)
         initial_residual1 = u_pred - u0_exact
-        
+
         u_t, _, _, _ = self.compute_gradients(x, t0)
         v0_exact = -GAMMA * torch.sin(ALPHA1 * np.pi * x)
         initial_residual2 = u_t - v0_exact
-        
+
         initial_loss_val = torch.mean(initial_residual1 ** 2) + torch.mean(initial_residual2 ** 2)
-        
+
         self.latest_initial_loss = initial_loss_val.item()
-        
+
         return initial_loss_val
-    
+
     def boundary_loss(self, t: torch.Tensor) -> torch.Tensor:
         x0 = torch.zeros_like(t)
         u0_pred = self.forward(x0, t)
@@ -321,24 +321,24 @@ class CGMPINN(nn.Module):
         x1 = torch.ones_like(t)
         u1_pred = self.forward(x1, t)
         u1_exact = torch.exp(-GAMMA * t) * torch.sin(ALPHA1 * np.pi * x1) * torch.cos(ALPHA2 * np.pi * t)
-        
+
         boundary_residual1 = u0_pred - u0_exact
         boundary_residual2 = u1_pred - u1_exact
         boundary_loss_val = torch.mean(boundary_residual1 ** 2) + torch.mean(boundary_residual2 ** 2)
-        
+
         self.latest_boundary_loss = boundary_loss_val.item()
-        
+
         return boundary_loss_val
-    
+
     def compute_weighted_total_loss(self, pde_data, initial_data, boundary_data) -> torch.Tensor:
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         pde_loss_val = self.pde_loss(x_pde, t_pde)
         initial_loss_val = self.initial_loss(x_initial, t_initial)
         boundary_loss_val = self.boundary_loss(t_boundary)
-        
+
         if self.use_relobralo:
             current_losses = [self.latest_pde_loss, self.latest_initial_loss, self.latest_boundary_loss]
             self.relobralo.update(current_losses)
@@ -350,17 +350,17 @@ class CGMPINN(nn.Module):
             )
         else:
             return pde_loss_val + initial_loss_val + boundary_loss_val
-    
+
     def final_total_loss(self, pde_data, initial_data, boundary_data) -> tuple[float, float, float, float]:
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         with torch.enable_grad():
             pde_loss_val = self.pde_loss(x_pde, t_pde).item()
             initial_loss_val = self.initial_loss(x_initial, t_initial).item()
             boundary_loss_val = self.boundary_loss(t_boundary).item()
-            
+
             if self.use_relobralo:
                 weights = self.relobralo.weights.detach().cpu().numpy()
                 total_loss_val = (
@@ -370,7 +370,7 @@ class CGMPINN(nn.Module):
                 )
             else:
                 total_loss_val = pde_loss_val + initial_loss_val + boundary_loss_val
-        
+
         return total_loss_val, pde_loss_val, initial_loss_val, boundary_loss_val
 
 # generate training and testing data
@@ -378,26 +378,26 @@ def generate_data(
     n_pde: int,
     n_initial: int,
     n_boundary: int,
-    n_test: int 
+    n_test: int
 ) -> tuple:
     x_pde = torch.rand(n_pde, 1, requires_grad=True)
     t_pde = torch.rand(n_pde, 1, requires_grad=True)
     pde_data = (x_pde, t_pde)
-    
+
     x_initial = torch.rand(n_initial, 1, requires_grad=True)
     t_initial = torch.zeros_like(x_initial, requires_grad=True)
     initial_data = (x_initial, t_initial)
-    
+
     t_boundary = torch.rand(n_boundary, 1, requires_grad=True)
     boundary_data = t_boundary
-    
+
     x_test = torch.linspace(0, 1, n_test).reshape(-1, 1)
     t_test = torch.linspace(0, 1, n_test).reshape(-1, 1)
     x_test_grid, t_test_grid = torch.meshgrid(x_test.squeeze(), t_test.squeeze(), indexing='ij')
     x_test_flat = x_test_grid.reshape(-1, 1)
     t_test_flat = t_test_grid.reshape(-1, 1)
     test_data = (x_test_flat, t_test_flat)
-    
+
     return pde_data, initial_data, boundary_data, test_data
 
 # training function (Adam)
@@ -410,11 +410,10 @@ def train_with_optimizer(
     boundary_data: torch.Tensor,
     loss_history: list,
     step_offset: int = 0,           # step offset
-    global_total_steps: int = None  # total global steps
+    global_total_steps: int | None = None  # total global steps
 ) -> int:  # return cumulative steps
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
-    t_boundary = boundary_data
     model.train()
 
     # If total global steps not specified, use current phase's epochs
@@ -424,10 +423,10 @@ def train_with_optimizer(
     for epoch in range(epochs):
         # Calculate global step (offset + current epoch)
         global_step = step_offset + epoch + 1
-        
+
         # Use global step to calculate tau
         model.set_training_progress(global_step, global_total_steps)
-        
+
         # Periodically update Gaussian mixture model weights
         if model.use_curriculum and epoch % model.curriculum_weight.update_interval == 0:
             model.update_curriculum_weights(x_pde, t_pde)
@@ -435,13 +434,13 @@ def train_with_optimizer(
 
         # Loss calculation and backpropagation (using ReLoBRaLo weighted total loss)
         total_loss = model.compute_weighted_total_loss(pde_data, initial_data, boundary_data)
-        
+
         optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()
-        
+
         loss_history.append(total_loss.item())
-        
+
         if (epoch + 1) % 1000 == 0:
             curr_info = f" (tau={model.current_tau:.3f})" if model.use_curriculum else ""
             relobralo_info = ""
@@ -459,7 +458,7 @@ def train_with_optimizer(
                 f'PDE loss: {pde_loss:.2e} | Initial condition loss: {initial_loss:.2e} | '
                 f'Boundary condition loss: {boundary_loss:.2e}'
             )
-    
+
     # Return cumulative global steps
     return step_offset + epochs
 
@@ -473,11 +472,10 @@ def train_with_lbfgs(
     lr: float,
     max_iter: int,
     step_offset: int = 0,           # Step offset
-    global_total_steps: int = None  # Total global steps
+    global_total_steps: int | None = None  # Total global steps
 ) -> int:  # Return cumulative steps
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
-    t_boundary = boundary_data
     model.train()
 
     # If total global steps not specified, use current phase's max_iter
@@ -496,12 +494,12 @@ def train_with_lbfgs(
         # Use ReLoBRaLo weighted total loss
         total_loss = model.compute_weighted_total_loss(pde_data, initial_data, boundary_data)
         total_loss.backward()
-        
+
         # Cache component loss values (for printing)
         pde_loss_val = model.latest_pde_loss if model.latest_pde_loss is not None else 0.0
         initial_loss_val = model.latest_initial_loss if model.latest_initial_loss is not None else 0.0
         boundary_loss_val = model.latest_boundary_loss if model.latest_boundary_loss is not None else 0.0
-        
+
         return total_loss
 
     optimizer = optim.LBFGS(
@@ -512,10 +510,10 @@ def train_with_lbfgs(
     for iter_idx in range(max_iter):
         # Calculate global step
         global_step = step_offset + iter_idx + 1
-        
+
         # Use global step to calculate tau
         model.set_training_progress(global_step, global_total_steps)
-        
+
         total_loss = optimizer.step(closure)
 
         # Periodically update curriculum learning weights
@@ -536,7 +534,7 @@ def train_with_lbfgs(
                 f'PDE loss: {pde_loss_val:.2e} | Initial condition loss: {initial_loss_val:.2e} | '
                 f'Boundary condition loss: {boundary_loss_val:.2e}'
             )
-    
+
     # Return cumulative global steps
     return step_offset + max_iter
 
@@ -553,33 +551,33 @@ def train_adam_lbfgs(
 ) -> None:
     # Calculate total global steps (Adam + L-BFGS)
     global_total_steps = adam_epochs + lbfgs_max_iter
-    
-    print(f"\n=== Stage 1: Adam Global Exploration (Starting from simple samples) ===")
+
+    print("\n=== Stage 1: Adam Global Exploration (Starting from simple samples) ===")
     print(f"    Global step range: 1 ~ {adam_epochs}, tau: 0 → {adam_epochs/global_total_steps:.3f}")
-    
+
     optimizer_adam = optim.Adam(model.parameters(), lr=0.001)
     current_step = train_with_optimizer(
-        model=model, 
-        optimizer=optimizer_adam, 
+        model=model,
+        optimizer=optimizer_adam,
         epochs=adam_epochs,
-        pde_data=pde_data, 
-        initial_data=initial_data, 
+        pde_data=pde_data,
+        initial_data=initial_data,
         boundary_data=boundary_data,
         loss_history=loss_history,
         step_offset=0,                        # Adam starts from step 0
         global_total_steps=global_total_steps # Use total global steps
     )
-    
-    print(f"\n=== Stage 2: L-BFGS Local Fine-tuning (Gradually focusing on difficult samples) ===")
+
+    print("\n=== Stage 2: L-BFGS Local Fine-tuning (Gradually focusing on difficult samples) ===")
     print(f"    Global step range: {current_step+1} ~ {global_total_steps}, tau: {current_step/global_total_steps:.3f} → 1.0")
-    
+
     train_with_lbfgs(
-        model=model, 
-        pde_data=pde_data, 
-        initial_data=initial_data, 
+        model=model,
+        pde_data=pde_data,
+        initial_data=initial_data,
         boundary_data=boundary_data,
-        loss_history=loss_history, 
-        lr=lr_lbfgs, 
+        loss_history=loss_history,
+        lr=lr_lbfgs,
         max_iter=lbfgs_max_iter,
         step_offset=current_step,             # L-BFGS continues from where Adam left off
         global_total_steps=global_total_steps # Use total global steps
@@ -601,7 +599,7 @@ def evaluate_model(
         linf_error = torch.max(torch.abs(u_pred - u_exact)).item()
         pointwise_error = torch.abs(u_pred - u_exact).numpy()
         u_pred_np = u_pred.numpy()
-    
+
     return l2_error, l2_relative_error, linf_error, pointwise_error, u_pred_np
 
 # Visualization function
@@ -628,84 +626,84 @@ def plot_solutions_by_activation_and_optimizer(
 ) -> None:
     x_test, t_test = test_data
     n_test = int(np.sqrt(len(x_test)))
-    
+
     for activation_name, results in activation_results.items():
         fig, axes = plt.subplots(3, 3, figsize=(20, 14))
         fig.suptitle(f'Solution Comparison - Activation: {activation_name}', fontsize=24, y=0.99)
-        
+
         for idx, optim_label in enumerate(optim_labels):
             u_pred = results[optim_label]['u_pred']
-            
+
             u_pred_grid = u_pred.reshape(n_test, n_test)
             u_exact_grid = u_exact_np.reshape(n_test, n_test)
             error_grid = np.abs(u_pred_grid - u_exact_grid)
             x_grid = x_test.reshape(n_test, n_test)
             t_grid = t_test.reshape(n_test, n_test)
-            
+
             ax1 = axes[idx, 0]
             im1 = ax1.pcolormesh(t_grid, x_grid, u_pred_grid, cmap=cm.jet, shading='gouraud')
             ax1.set_xlabel('Time (t)', fontsize=10)
             ax1.set_ylabel('Position (x)', fontsize=10)
             ax1.set_title(f'{optim_label} - Predicted', fontsize=12)
             plt.colorbar(im1, ax=ax1, shrink=0.6, aspect=5)
-            
+
             ax2 = axes[idx, 1]
             im2 = ax2.pcolormesh(t_grid, x_grid, u_exact_grid, cmap=cm.jet, shading='gouraud')
             ax2.set_title('Analytical Solution', fontsize=12)
             plt.colorbar(im2, ax=ax2, shrink=0.6, aspect=5)
             ax2.set_xlabel('Time (t)', fontsize=10)
             ax2.set_ylabel('Position (x)', fontsize=10)
-            
+
             ax3 = axes[idx, 2]
             im3 = ax3.pcolormesh(t_grid, x_grid, error_grid, cmap=cm.viridis, shading='gouraud')
             ax3.set_xlabel('Time (t)', fontsize=10)
             ax3.set_ylabel('Position (x)', fontsize=10)
             ax3.set_title(f'{optim_label} - Absolute Error', fontsize=12)
             plt.colorbar(im3, ax=ax3, shrink=0.6, aspect=5)
-        
+
         plt.tight_layout()
         plt.subplots_adjust(top=0.95)
         save_figure(f"solutions_{activation_name}")
         plt.show()
 
 def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_flat):
-    x_grid_flat = x_grid_flat.ravel()  
-    t_grid_flat = t_grid_flat.ravel()  
+    x_grid_flat = x_grid_flat.ravel()
+    t_grid_flat = t_grid_flat.ravel()
     u_exact_flat = u_exact_flat.ravel()
 
     n_test = int(np.sqrt(len(x_grid_flat)))
     if n_test * n_test != len(x_grid_flat):
         raise ValueError(f"Number of data points {len(x_grid_flat)} is not a perfect square, please check the test data generation logic")
-    
-    x_coords = np.unique(x_grid_flat)  
-    t_coords = np.unique(t_grid_flat)  
+
+    x_coords = np.unique(x_grid_flat)
+    t_coords = np.unique(t_grid_flat)
     u_exact_grid = u_exact_flat.reshape(n_test, n_test)
-    
+
     optim_labels = list(u_pred_results.keys())
     n_optims = len(optim_labels)
     fig, axes = plt.subplots(n_optims, 3, figsize=(21, 6*n_optims))
     if n_optims == 1:
         axes = axes.reshape(1, -1)
-    
-    fig.suptitle(f'Damping Characteristics Comparison by Optimizers', fontsize=18, y=0.98)
-    
+
+    fig.suptitle('Damping Characteristics Comparison by Optimizers', fontsize=18, y=0.98)
+
     for row_idx, optim_label in enumerate(optim_labels):
         u_pred_grid = u_pred_results[optim_label].ravel().reshape(n_test, n_test)
-        
+
         # First column: Spatial waveforms at different time points
         ax1 = axes[row_idx, 0]
         time_indices = [0, n_test//4, n_test//2, 3*n_test//4, n_test-1]
         colors = plt.cm.plasma(np.linspace(0, 0.9, len(time_indices)))
-        
+
         for idx, t_idx in enumerate(time_indices):
             t_val = t_coords[t_idx]
-            ax1.plot(x_coords, u_exact_grid[:, t_idx], 
+            ax1.plot(x_coords, u_exact_grid[:, t_idx],
                      color=colors[idx], linewidth=2.5, linestyle='-',
                      label=f'$t={t_val:.2f}$')
-            ax1.plot(x_coords, u_pred_grid[:, t_idx], 
+            ax1.plot(x_coords, u_pred_grid[:, t_idx],
                      color=colors[idx], linewidth=2, linestyle='--', marker='o',
                      markevery=10, markersize=4)
-        
+
         ax1.set_xlabel('Position $x$', fontsize=12)
         ax1.set_ylabel('$u(x,t)$', fontsize=12)
         ax1.set_title(f'{optim_label} - Spatial Profiles', fontsize=14)
@@ -713,28 +711,28 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
         ax1.grid(True, alpha=0.3, linestyle='--')
         ax1.axhline(y=0, color='k', linewidth=0.5)
         ax1.set_xlim([0, 1])
-        
-        ax1.annotate('', xy=(0.5, u_exact_grid[n_test//2, 0]), 
+
+        ax1.annotate('', xy=(0.5, u_exact_grid[n_test//2, 0]),
                          xytext=(0.5, u_exact_grid[n_test//2, -1]),
                          arrowprops=dict(arrowstyle='<->', color='green', lw=2))
         ax1.text(0.55, 0.5, 'Amplitude\nDecay', fontsize=10, color='green')
-        
+
         # Second column: Temporal evolution at x=0.5
         ax2 = axes[row_idx, 1]
         x_mid_idx = np.argmin(np.abs(x_coords - 0.5))
-        t_vals = t_coords 
-        
-        ax2.plot(t_vals, u_exact_grid[x_mid_idx, :], 
+        t_vals = t_coords
+
+        ax2.plot(t_vals, u_exact_grid[x_mid_idx, :],
                  'b-', linewidth=2.5, label='Analytical Solution')
-        ax2.plot(t_vals, u_pred_grid[x_mid_idx, :], 
+        ax2.plot(t_vals, u_pred_grid[x_mid_idx, :],
                  'r--', linewidth=2, label=f'{optim_label} Prediction')
-        
+
         # Plot decay envelope
         envelope = np.exp(-GAMMA * t_vals)
-        ax2.plot(t_vals, envelope, 'g-.', linewidth=2, label=f'Envelope: $e^{{-\\gamma t}}$')
+        ax2.plot(t_vals, envelope, 'g-.', linewidth=2, label='Envelope: $e^{-\\gamma t}$')
         ax2.plot(t_vals, -envelope, 'g-.', linewidth=2)
         ax2.fill_between(t_vals, -envelope, envelope, alpha=0.1, color='green')
-        
+
         ax2.set_xlabel('Time $t$', fontsize=12)
         ax2.set_ylabel('$u(x=0.5, t)$', fontsize=12)
         ax2.set_title(f'{optim_label} - Temporal Evolution', fontsize=14)
@@ -742,23 +740,23 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
         ax2.grid(True, alpha=0.3, linestyle='--')
         ax2.axhline(y=0, color='k', linewidth=0.5)
         ax2.set_xlim([0, 1])
-        
+
         # Third column: Error analysis at x=0.5
         ax3 = axes[row_idx, 2]
         u_exact_mid = u_exact_grid[x_mid_idx, :]
         u_pred_mid = u_pred_grid[x_mid_idx, :]
         abs_error = np.abs(u_pred_mid - u_exact_mid)
-        rel_error = abs_error / (np.abs(u_exact_mid) + 1e-8) * 100  
-        
+        rel_error = abs_error / (np.abs(u_exact_mid) + 1e-8) * 100
+
         ax3.plot(t_vals, abs_error, 'darkred', linewidth=2.5, label='Absolute Error')
         ax3_twin = ax3.twinx()
         ax3_twin.plot(t_vals, rel_error, 'orange', linewidth=2, linestyle='--', label='Relative Error (%)')
         ax3_twin.set_ylabel('Relative Error (%)', fontsize=12, color='orange')
         ax3_twin.tick_params(axis='y', labelcolor='orange')
-                
+
         ax3.axhline(y=0, color='black', linewidth=1, linestyle='-', alpha=0.8)
         ax3.fill_between(t_vals, 0, abs_error, alpha=0.2, color='darkred')
-        
+
         mean_error = np.mean(abs_error)
         max_error = np.max(abs_error)
         rmse = np.sqrt(np.mean(abs_error**2))
@@ -768,7 +766,7 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
         ax3.text(0.05, 0.95, error_text, transform=ax3.transAxes,
                  fontsize=9, verticalalignment='top',
                  bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-        
+
         handles1, labels1 = ax3.get_legend_handles_labels()
         handles2, labels2 = ax3_twin.get_legend_handles_labels()
         ax3.legend(handles1 + handles2, labels1 + labels2, loc='upper right', fontsize=9)
@@ -780,7 +778,7 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
         ax3.grid(True, alpha=0.3, linestyle='--')
         ax3.set_xlim([0, 1])
         ax3.set_ylim(bottom=0)
-    
+
     plt.tight_layout()
     plt.subplots_adjust(top=0.95, hspace=0.3)
     save_figure("damping_effect")
@@ -789,21 +787,21 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
 # Main function
 def train_1D_wave_CGMPINN_with_activations():
     # 1. Hyperparameter settings
-    n_layers = 4              
-    input_dim = 2             
-    output_dim = 1          
-    hidden_dim = 50        
-    n_pde = 2000             
-    n_initial = 300          
-    n_boundary = 300         
-    n_test = 100              
+    n_layers = 4
+    input_dim = 2
+    output_dim = 1
+    hidden_dim = 50
+    n_pde = 2000
+    n_initial = 300
+    n_boundary = 300
+    n_test = 100
     lr_lbfgs_config = {'Tanh': 0.1}
-    lr_adam_lbfgs = 0.8       
-    epochs_adam = 15000    
-    max_iter_lbfgs = 15000    
-    adam_lbfgs_adam_epochs = 5000  
-    adam_lbfgs_lbfgs_iter = 10000  
-    
+    lr_adam_lbfgs = 0.8
+    epochs_adam = 15000
+    max_iter_lbfgs = 15000
+    adam_lbfgs_adam_epochs = 5000
+    adam_lbfgs_lbfgs_iter = 10000
+
     # Curriculum learning + GMM parameters
     gmm_kwargs = {
         'n_components': 4,
@@ -813,7 +811,7 @@ def train_1D_wave_CGMPINN_with_activations():
         'tau_saturation': 0.8,
         'use_variance_factor': True
     }
-    
+
     # ReLoBRaLo adaptive weight parameters
     relobralo_kwargs = {
         'n_losses': 3,
@@ -822,12 +820,12 @@ def train_1D_wave_CGMPINN_with_activations():
         'rho': 0.99,
         'device': 'cpu'
     }
-    
+
     # Activation function dictionary
     activations = {'Tanh': TanhActivation()}
     activation_names = list(activations.keys())
     optim_labels = ['Adam (CGMPINN)', 'L-BFGS (CGMPINN)', 'Adam→L-BFGS (CGMPINN)']
-    
+
     # 2. Generate data
     print("Generating training and testing data...")
     pde_data, initial_data, boundary_data, test_data = generate_data(
@@ -837,26 +835,26 @@ def train_1D_wave_CGMPINN_with_activations():
         n_test=n_test
     )
     x_test, t_test = test_data
-    
+
     # Calculate exact solution: u(x,t) = e^(-γt) * sin(α1πx) * cos(α2πt)
     u_exact = torch.exp(-GAMMA * t_test) * torch.sin(ALPHA1 * np.pi * x_test) * torch.cos(ALPHA2 * np.pi * t_test)
     u_exact_np = u_exact.numpy()
-    
+
     # 3. Initialize storage variables
     activation_loss_histories = {}
     activation_results = {}
     activation_training_times = {}
-    
+
     # 4. Train all optimizers for each activation function
     for activation_name, activation_fn in activations.items():
         print("\n" + "="*80)
         print(f"Starting training - Activation function: {activation_name} | Equation parameters: α1={ALPHA1}, α2={ALPHA2}, γ={GAMMA}, β={BETA}, c={c}")
         print("="*80)
-        
+
         current_loss_histories = []
         current_results = {}
         current_training_times = []
-        
+
         # 4.1 Adam training (CGMPINN)
         print(f"\n--- {activation_name} + Adam (CGMPINN+ReLoBRaLo) ---")
         model_adam = CGMPINN(
@@ -878,7 +876,7 @@ def train_1D_wave_CGMPINN_with_activations():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate Adam
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_adam, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary = model_adam.final_total_loss(pde_data, initial_data, boundary_data)
@@ -894,7 +892,7 @@ def train_1D_wave_CGMPINN_with_activations():
         }
         current_loss_histories.append(loss_history_adam)
         print(f"Adam training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.2 L-BFGS training (CGMPINN)
         print(f"\n--- {activation_name} + L-BFGS (CGMPINN) ---")
         model_lbfgs = CGMPINN(
@@ -915,7 +913,7 @@ def train_1D_wave_CGMPINN_with_activations():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate L-BFGS
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_lbfgs, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary = model_lbfgs.final_total_loss(pde_data, initial_data, boundary_data)
@@ -931,7 +929,7 @@ def train_1D_wave_CGMPINN_with_activations():
         }
         current_loss_histories.append(loss_history_lbfgs)
         print(f"L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.3 Adam→L-BFGS training (CGMPINN)
         print(f"\n--- {activation_name} + Adam→L-BFGS (CGMPINN+ReLoBRaLo) ---")
         model_adam_lbfgs = CGMPINN(
@@ -953,7 +951,7 @@ def train_1D_wave_CGMPINN_with_activations():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate Adam→L-BFGS
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_adam_lbfgs, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary = model_adam_lbfgs.final_total_loss(pde_data, initial_data, boundary_data)
@@ -968,18 +966,18 @@ def train_1D_wave_CGMPINN_with_activations():
             'u_pred': u_pred
         }
         current_loss_histories.append(loss_history_adam_lbfgs)
-        
+
         # Save Tanh+Adam→LBFGS model
-        if activation_name == 'Tanh':  
+        if activation_name == 'Tanh':
             save_path = os.path.join(PARAMETER_DIR, "1D_wave_tanh_adam2lbfgs_cgmpinn.pth")
             os.makedirs(PARAMETER_DIR, exist_ok=True)
             complete_save_dict = {
-                'model_state_dict': model_adam_lbfgs.state_dict(), 
-                'loss_history': loss_history_adam_lbfgs,            
-                'final_total_loss': final_total,                    
-                'training_time': train_time,                        
-                'activation_name': activation_name,                
-                'hyper_parameters': {                               
+                'model_state_dict': model_adam_lbfgs.state_dict(),
+                'loss_history': loss_history_adam_lbfgs,
+                'final_total_loss': final_total,
+                'training_time': train_time,
+                'activation_name': activation_name,
+                'hyper_parameters': {
                     'n_layers': n_layers,
                     'hidden_dim': hidden_dim,
                     'adam_epochs': adam_lbfgs_adam_epochs,
@@ -988,14 +986,14 @@ def train_1D_wave_CGMPINN_with_activations():
             }
             torch.save(complete_save_dict, save_path)
             print(f"✅ Tanh+Adam→L-BFGS wave equation CGMPINN model saved to: {save_path}")
-        
+
         print(f"Adam→L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # Save current activation function results
         activation_loss_histories[activation_name] = current_loss_histories
         activation_results[activation_name] = current_results
         activation_training_times[activation_name] = current_training_times
-    
+
     # 5. Visualization of results
     plot_loss_curves_by_activation(activation_loss_histories, optim_labels)
     plot_solutions_by_activation_and_optimizer(activation_results, test_data, u_exact_np, optim_labels)
@@ -1004,7 +1002,7 @@ def train_1D_wave_CGMPINN_with_activations():
         {optim_label: activation_results['Tanh'][optim_label]['u_pred'] for optim_label in optim_labels},
         u_exact.numpy()
     )
-    
+
     # 6. Print comprehensive comparison table
     print("\n" + "="*120)
     print("Comprehensive comparison table for all activation functions × optimizers (1D wave equation with damping - CGMPINN)")
@@ -1026,7 +1024,7 @@ def train_1D_wave_CGMPINN_with_activations():
                 f"{results['linf_error']:<12.2e} "
                 f"{results['final_total_loss']:<12.2e}"
             )
-    
+
     # 7. Print best performance for each activation function
     print("\n" + "="*100)
     print("Best performance for each activation function (sorted by L2 error - CGMPINN)")

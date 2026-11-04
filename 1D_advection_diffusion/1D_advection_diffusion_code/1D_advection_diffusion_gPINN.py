@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from matplotlib import cm  
+from matplotlib import cm
 import matplotlib.pyplot as plt
 import time
 import os
@@ -47,21 +47,21 @@ class TanhActivation(nn.Module):
 # 1. gPINN model
 class gPINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation, grad_weight=0.01):
-        super(gPINN, self).__init__()
-        self.activation = activation  
-        self.grad_weight = grad_weight  
+        super().__init__()
+        self.activation = activation
+        self.grad_weight = grad_weight
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
         for _ in range(n_layers - 1):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, t], dim=1)
         return self.layers(input_tensor)
 
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        u = self.forward(x, t)  
+        u = self.forward(x, t)
         u_t = torch.autograd.grad(
             outputs=u,
             inputs=t,
@@ -87,11 +87,11 @@ class gPINN(nn.Module):
             only_inputs=True
         )[0]
         return u_t, u_x, u_xx
-    
+
     def compute_high_order_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple:
         u_t, u_x, u_xx = self.compute_gradients(x, t)
         f = u_t + BETA * u_x - NU * u_xx
-        
+
         f_x = torch.autograd.grad(
             outputs=f, inputs=x, grad_outputs=torch.ones_like(f),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -100,25 +100,25 @@ class gPINN(nn.Module):
             outputs=f, inputs=t, grad_outputs=torch.ones_like(f),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         return u_t, u_x, u_xx, f, f_x, f_t
 
     def pde_loss(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         _, _, _, f, _, _ = self.compute_high_order_gradients(x, t)
         return torch.mean(f ** 2)
-    
+
     def grad_loss(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         _, _, _, _, f_x, f_t = self.compute_high_order_gradients(x, t)
-        grad_loss_x = torch.mean(f_x ** 2)  
-        grad_loss_t = torch.mean(f_t ** 2)  
+        grad_loss_x = torch.mean(f_x ** 2)
+        grad_loss_t = torch.mean(f_t ** 2)
         return self.grad_weight * (grad_loss_x + grad_loss_t)
-    
+
     def initial_loss(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         u_pred = self.forward(x, t0)
-        u_exact = -torch.sin(np.pi * x)  
+        u_exact = -torch.sin(np.pi * x)
         initial_residual = u_pred - u_exact
         return torch.mean(initial_residual ** 2)
-    
+
     def boundary_loss(self, t: torch.Tensor) -> torch.Tensor:
         x_left = -torch.ones_like(t, requires_grad=True)
         u_left = self.forward(x_left, t)
@@ -126,31 +126,31 @@ class gPINN(nn.Module):
             outputs=u_left, inputs=x_left, grad_outputs=torch.ones_like(u_left),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         x_right = torch.ones_like(t, requires_grad=True)
         u_right = self.forward(x_right, t)
         u_x_right = torch.autograd.grad(
             outputs=u_right, inputs=x_right, grad_outputs=torch.ones_like(u_right),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         bc1_residual = u_left - u_right  # u(-1,t) = u(1,t)
         bc2_residual = u_x_left - u_x_right  # ∂u/∂x(-1,t) = ∂u/∂x(1,t)
-        
+
         return torch.mean(bc1_residual ** 2) + torch.mean(bc2_residual ** 2)
-    
+
     def final_total_loss(self, pde_data, initial_data, boundary_data) -> tuple[float, float, float, float, float]:
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         with torch.enable_grad():
             pde_loss_val = self.pde_loss(x_pde, t_pde).item()
             initial_loss_val = self.initial_loss(x_initial, t_initial).item()
             boundary_loss_val = self.boundary_loss(t_boundary).item()
-            grad_loss_val = self.grad_loss(x_pde, t_pde).item() 
+            grad_loss_val = self.grad_loss(x_pde, t_pde).item()
             total_loss_val = pde_loss_val + initial_loss_val + boundary_loss_val + grad_loss_val
-        
+
         return total_loss_val, pde_loss_val, initial_loss_val, boundary_loss_val, grad_loss_val
 
 # 2. generate training and testing data
@@ -158,22 +158,22 @@ def generate_data(
     n_pde: int,
     n_initial: int,
     n_boundary: int,
-    n_test: int 
+    n_test: int
 ) -> tuple:
     # PDE interior points: x ∈ [-1,1], t ∈ [0,1]
     x_pde = (torch.rand(n_pde, 1) * 2 - 1).requires_grad_(True)
     t_pde = torch.rand(n_pde, 1).requires_grad_(True)
     pde_data = (x_pde, t_pde)
-    
+
     # Initial condition points: t=0, x ∈ [-1,1]
     x_initial = (torch.rand(n_initial, 1) * 2 - 1).requires_grad_(True)
     t_initial = torch.zeros_like(x_initial, requires_grad=True)
     initial_data = (x_initial, t_initial)
-    
+
     # Boundary condition points: t ∈ [0,1] (for x=-1 and x=1 boundaries)
     t_boundary = torch.rand(n_boundary, 1).requires_grad_(True)
     boundary_data = t_boundary
-    
+
     # Test data (grid points)
     x_test = torch.linspace(SPACE_DOMAIN[0], SPACE_DOMAIN[1], n_test).reshape(-1, 1)
     t_test = torch.linspace(TIME_DOMAIN[0], TIME_DOMAIN[1], n_test).reshape(-1, 1)
@@ -181,7 +181,7 @@ def generate_data(
     x_test_flat = x_test_grid.reshape(-1, 1)
     t_test_flat = t_test_grid.reshape(-1, 1)
     test_data = (x_test_flat, t_test_flat)
-    
+
     return pde_data, initial_data, boundary_data, test_data
 
 # 3. training function (Adam, with gradient loss)
@@ -197,22 +197,22 @@ def train_with_optimizer(
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
     t_boundary = boundary_data
-    
+
     model.train()
 
     for epoch in range(epochs):
         pde_loss = model.pde_loss(x_pde, t_pde)
         initial_loss = model.initial_loss(x_initial, t_initial)
         boundary_loss = model.boundary_loss(t_boundary)
-        grad_loss = model.grad_loss(x_pde, t_pde)  
+        grad_loss = model.grad_loss(x_pde, t_pde)
         total_loss = pde_loss + initial_loss + boundary_loss + grad_loss
-        
+
         optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()
-        
+
         loss_history.append(total_loss.item())
-        
+
         if (epoch + 1) % 1000 == 0:
             print(
                 f'Epoch {epoch+1:4d} | Total Loss: {total_loss.item():.2e} | '
@@ -233,7 +233,7 @@ def train_with_lbfgs(
     x_pde, t_pde = pde_data
     x_initial, t_initial = initial_data
     t_boundary = boundary_data
-    
+
     model.train()
     pde_loss_val = initial_loss_val = boundary_loss_val = grad_loss_val = 0.0
 
@@ -243,16 +243,16 @@ def train_with_lbfgs(
         pde_loss = model.pde_loss(x_pde, t_pde)
         initial_loss = model.initial_loss(x_initial, t_initial)
         boundary_loss = model.boundary_loss(t_boundary)
-        grad_loss = model.grad_loss(x_pde, t_pde)  
+        grad_loss = model.grad_loss(x_pde, t_pde)
         total_loss = pde_loss + initial_loss + boundary_loss + grad_loss
         total_loss.backward()
-        
+
         pde_loss_val = pde_loss.item()
         initial_loss_val = initial_loss.item()
         boundary_loss_val = boundary_loss.item()
         grad_loss_val = grad_loss.item()
         return total_loss
-    
+
     optimizer = optim.LBFGS(
         model.parameters(),
         max_iter=1,
@@ -260,12 +260,12 @@ def train_with_lbfgs(
         line_search_fn='strong_wolfe',
         lr=lr
     )
-    
+
     for iter_idx in range(max_iter):
         total_loss = optimizer.step(closure)
         current_loss = total_loss.item()
         loss_history.append(current_loss)
-        
+
         if (iter_idx + 1) % 500 == 0 or iter_idx == 0:
             print(
                 f'Iteration {iter_idx+1}/{max_iter} | Total Loss: {current_loss:.2e} | '
@@ -295,7 +295,7 @@ def train_adam_lbfgs(
         boundary_data=boundary_data,
         loss_history=loss_history
     )
-    
+
     print("\n=== Stage 2: L-BFGS Local Refinement ===")
     train_with_lbfgs(
         model=model,
@@ -323,7 +323,7 @@ def evaluate_model(
         linf_error = torch.max(torch.abs(u_pred - u_exact)).item()
         pointwise_error = torch.abs(u_pred - u_exact).numpy()
         u_pred_np = u_pred.numpy()
-    
+
     return l2_error, l2_relative_error, linf_error, pointwise_error, u_pred_np
 
 # 7. Visualization functions
@@ -350,41 +350,41 @@ def plot_solutions_by_activation_and_optimizer(
 ) -> None:
     x_test, t_test = test_data
     n_test = int(np.sqrt(len(x_test)))
-    
+
     for activation_name, results in activation_results.items():
         fig, axes = plt.subplots(3, 3, figsize=(20, 14))
         fig.suptitle(f'Solution Comparison - Activation: {activation_name} (gPINN)', fontsize=24, y=0.99)
-        
+
         for idx, optim_label in enumerate(optim_labels):
             u_pred = results[optim_label]['u_pred']
-            
+
             u_pred_grid = u_pred.reshape(n_test, n_test)
             u_exact_grid = u_exact_np.reshape(n_test, n_test)
             error_grid = np.abs(u_pred_grid - u_exact_grid)
             x_grid = x_test.reshape(n_test, n_test)
             t_grid = t_test.reshape(n_test, n_test)
-            
+
             ax1 = axes[idx, 0]
             im1 = ax1.pcolormesh(t_grid, x_grid, u_pred_grid, cmap=cm.jet, shading='gouraud')
             ax1.set_xlabel('Time (t)', fontsize=10)
             ax1.set_ylabel('Position (x)', fontsize=10)
             ax1.set_title(f'{optim_label} - Predicted', fontsize=12)
             plt.colorbar(im1, ax=ax1, shrink=0.6, aspect=5)
-            
+
             ax2 = axes[idx, 1]
             im2 = ax2.pcolormesh(t_grid, x_grid, u_exact_grid, cmap=cm.jet, shading='gouraud')
             ax2.set_title('Analytical Solution', fontsize=12)
             plt.colorbar(im2, ax=ax2, shrink=0.6, aspect=5)
             ax2.set_xlabel('Time (t)', fontsize=10)
             ax2.set_ylabel('Position (x)', fontsize=10)
-            
+
             ax3 = axes[idx, 2]
             im3 = ax3.pcolormesh(t_grid, x_grid, error_grid, cmap=cm.viridis, shading='gouraud')
             ax3.set_xlabel('Time (t)', fontsize=10)
             ax3.set_ylabel('Position (x)', fontsize=10)
             ax3.set_title(f'{optim_label} - Absolute Error', fontsize=12)
             plt.colorbar(im3, ax=ax3, shrink=0.6, aspect=5)
-        
+
         plt.tight_layout()
         plt.subplots_adjust(top=0.95)
         save_figure(f"solutions_{activation_name}")
@@ -393,27 +393,27 @@ def plot_solutions_by_activation_and_optimizer(
 # 8. Main function (Execution flow)
 def train_1D_advection_diffusion_gPINN():
     # 1. Hyperparameter settings
-    n_layers = 4              
-    input_dim = 2             
-    output_dim = 1          
-    hidden_dim = 50  
-    grad_weight = 0.01  # Gradient loss weight      
-    n_pde = 3000             
-    n_initial = 300          
-    n_boundary = 300         
-    n_test = 100              
+    n_layers = 4
+    input_dim = 2
+    output_dim = 1
+    hidden_dim = 50
+    grad_weight = 0.01  # Gradient loss weight
+    n_pde = 3000
+    n_initial = 300
+    n_boundary = 300
+    n_test = 100
     lr_lbfgs_config = {'Tanh': 1.0}
-    lr_adam_lbfgs = 0.8       
-    epochs_adam = 15000    
-    max_iter_lbfgs = 15000    
-    adam_lbfgs_adam_epochs = 5000  
-    adam_lbfgs_lbfgs_iter = 10000  
-    
+    lr_adam_lbfgs = 0.8
+    epochs_adam = 15000
+    max_iter_lbfgs = 15000
+    adam_lbfgs_adam_epochs = 5000
+    adam_lbfgs_lbfgs_iter = 10000
+
     # Activation functions dictionary
     activations = {'Tanh': TanhActivation()}
     activation_names = list(activations.keys())
     optim_labels = ['Adam (gPINN)', 'L-BFGS (gPINN)', 'Adam→L-BFGS (gPINN)']
-    
+
     # 2. Generate data
     print("Generating training and testing data...")
     pde_data, initial_data, boundary_data, test_data = generate_data(
@@ -423,27 +423,27 @@ def train_1D_advection_diffusion_gPINN():
         n_test=n_test
     )
     x_test, t_test = test_data
-    
+
     # Calculate analytical solution for advection-diffusion equation
     pi = np.pi
     u_exact = -torch.exp(-NU * pi**2 * t_test) * torch.sin(pi * (x_test - BETA * t_test))
     u_exact_np = u_exact.numpy()
-    
+
     # 3. Initialize storage variables
     activation_loss_histories = {}
     activation_results = {}
     activation_training_times = {}
-    
+
     # 4. Train all optimizers for each activation function
     for activation_name, activation_fn in activations.items():
         print("\n" + "="*80)
         print(f"Starting training - Activation: {activation_name} | Advection-Diffusion Parameters: β={BETA}, ν={NU}")
         print("="*80)
-        
+
         current_loss_histories = []
         current_results = {}
         current_training_times = []
-        
+
         # 4.1 Adam training
         print(f"\n--- {activation_name} + Adam (gPINN) ---")
         model_adam = gPINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn, grad_weight=grad_weight)
@@ -461,7 +461,7 @@ def train_1D_advection_diffusion_gPINN():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate Adam
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_adam, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary, final_grad = model_adam.final_total_loss(pde_data, initial_data, boundary_data)
@@ -478,7 +478,7 @@ def train_1D_advection_diffusion_gPINN():
         }
         current_loss_histories.append(loss_history_adam)
         print(f"Adam training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.2 L-BFGS training
         print(f"\n--- {activation_name} + L-BFGS (gPINN) ---")
         model_lbfgs = gPINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn, grad_weight=grad_weight)
@@ -495,7 +495,7 @@ def train_1D_advection_diffusion_gPINN():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate L-BFGS
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_lbfgs, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary, final_grad = model_lbfgs.final_total_loss(pde_data, initial_data, boundary_data)
@@ -512,7 +512,7 @@ def train_1D_advection_diffusion_gPINN():
         }
         current_loss_histories.append(loss_history_lbfgs)
         print(f"L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.3 Adam→L-BFGS training
         print(f"\n--- {activation_name} + Adam→L-BFGS (gPINN) ---")
         model_adam_lbfgs = gPINN(input_dim, output_dim, hidden_dim, n_layers, activation_fn, grad_weight=grad_weight)
@@ -530,7 +530,7 @@ def train_1D_advection_diffusion_gPINN():
         )
         train_time = time.time() - start_time
         current_training_times.append(train_time)
-        
+
         # Evaluate Adam→L-BFGS
         l2_err, l2_rel_err, linf_err, _, u_pred = evaluate_model(model_adam_lbfgs, test_data, u_exact)
         final_total, final_pde, final_initial, final_boundary, final_grad = model_adam_lbfgs.final_total_loss(pde_data, initial_data, boundary_data)
@@ -546,18 +546,18 @@ def train_1D_advection_diffusion_gPINN():
             'u_pred': u_pred
         }
         current_loss_histories.append(loss_history_adam_lbfgs)
-        
+
         # Save Tanh+Adam→LBFGS model
         if activation_name == 'Tanh':
             save_path = os.path.join(PARAMETER_DIR, "1D_advection_diffusion_tanh_adam2lbfgs_gpinn.pth")
             os.makedirs(PARAMETER_DIR, exist_ok=True)
             complete_save_dict = {
-                'model_state_dict': model_adam_lbfgs.state_dict(), 
-                'loss_history': loss_history_adam_lbfgs,            
-                'final_total_loss': final_total,                    
-                'training_time': train_time,                        
-                'activation_name': activation_name,                
-                'hyper_parameters': {                               
+                'model_state_dict': model_adam_lbfgs.state_dict(),
+                'loss_history': loss_history_adam_lbfgs,
+                'final_total_loss': final_total,
+                'training_time': train_time,
+                'activation_name': activation_name,
+                'hyper_parameters': {
                     'n_layers': n_layers,
                     'hidden_dim': hidden_dim,
                     'adam_epochs': adam_lbfgs_adam_epochs,
@@ -566,18 +566,18 @@ def train_1D_advection_diffusion_gPINN():
             }
             torch.save(complete_save_dict, save_path)
             print(f"✅ Tanh+Adam→L-BFGS gPINN model saved to: {save_path}")
-        
+
         print(f"Adam→L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # Save current activation function results
         activation_loss_histories[activation_name] = current_loss_histories
         activation_results[activation_name] = current_results
         activation_training_times[activation_name] = current_training_times
-    
+
     # 5. Results visualization
     plot_loss_curves_by_activation(activation_loss_histories, optim_labels)
     plot_solutions_by_activation_and_optimizer(activation_results, test_data, u_exact_np, optim_labels)
-    
+
     # 6. Print comprehensive comparison table (including gradient loss)
     print("\n" + "="*140)
     print("1D Advection-Diffusion Equation - gPINN Comprehensive Comparison Table (Including Gradient Loss)")
@@ -600,7 +600,7 @@ def train_1D_advection_diffusion_gPINN():
                 f"{results['final_total_loss']:<12.2e} "
                 f"{results['final_grad_loss']:<12.2e}"
             )
-    
+
     # 7. Print best performance for each activation function
     print("\n" + "="*120)
     print("Best performance for each optimizer (sorted by standard L2 error)")

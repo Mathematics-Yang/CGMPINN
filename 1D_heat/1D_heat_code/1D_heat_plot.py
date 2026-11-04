@@ -3,15 +3,12 @@ from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.ticker import ScalarFormatter
 from sklearn.mixture import GaussianMixture
 import os
-import sys
-import time
 import re
 
 # Output locations (resolved relative to this script, not the working directory)
@@ -57,12 +54,12 @@ k = 10.0      # spatial parameter (controls steepness of hyperbolic tangent func
 
 # Hyperparameters
 N_LAYERS = 4
-N_LAYERS_PER_BLOCK = 2 
-N_BLOCKS = 3  
+N_LAYERS_PER_BLOCK = 2
+N_BLOCKS = 3
 INPUT_DIM = 2  # x + t
 OUTPUT_DIM = 1
 HIDDEN_DIM = 50
-N_TEST = 100  
+N_TEST = 100
 GRAD_WEIGHT = 0.01
 
 # Basic component definitions
@@ -101,7 +98,7 @@ def evaluate_model(model, test_data: tuple, u_exact: torch.Tensor) -> tuple:
 # 1. Basic PINN model for 1D heat conduction
 class PINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(PINN, self).__init__()
+        super().__init__()
         self.activation = activation
         # Build network
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
@@ -109,11 +106,11 @@ class PINN(nn.Module):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, t], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple:
         u = self.forward(x, t)
         u_t = torch.autograd.grad(
@@ -129,7 +126,7 @@ class PINN(nn.Module):
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
         return u_t, u_xx, u_x
-    
+
     def source_term(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         sin_alpha1pi_x = torch.sin(ALPHA1 * np.pi * x)
         tanh_kx = torch.tanh(k * x)
@@ -138,47 +135,47 @@ class PINN(nn.Module):
 
         # u = (sin(α1πx) + tanh(kx)) * sin(α2πt)
         u_t_exact = (sin_alpha1pi_x + tanh_kx) * ALPHA2 * np.pi * cos_alpha2pi_t
-        
+
         # u_xx = [ - α1²π² sin(α1πx) - 2k² sech²(kx) tanh(kx) ] * sin(α2πt)
         sech_kx_sq = 1 / (torch.cosh(k * x) ** 2)
         u_xx_exact = (
-            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x 
+            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x
             - 2 * (k ** 2) * sech_kx_sq * tanh_kx
         ) * sin_alpha2pi_t
-        
+
         # f(x,t) = u_t - u_xx
         f = u_t_exact - u_xx_exact
         return f
-    
+
     def pde_loss(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         u_t, u_xx, _ = self.compute_gradients(x, t)
         f = self.source_term(x, t)
         pde_residual = u_t - u_xx - f
         return torch.mean(pde_residual ** 2)
-    
+
     def initial_loss(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         u_pred = self.forward(x, t0)
         u_exact = self.analytical_solution(x, t0)
         return torch.mean((u_pred - u_exact) ** 2)
-    
+
     def boundary_loss(self, t: torch.Tensor) -> torch.Tensor:
         x0 = torch.zeros_like(t, requires_grad=True)
         u0_pred = self.forward(x0, t)
         u0_exact = self.analytical_solution(x0, t)
-        
+
         x1 = torch.ones_like(t, requires_grad=True)
         u1_pred = self.forward(x1, t)
         u1_exact = self.analytical_solution(x1, t)
-        
+
         return torch.mean((u0_pred - u0_exact)**2 + (u1_pred - u1_exact)**2)
-    
+
     def analytical_solution(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return (torch.sin(ALPHA1 * np.pi * x) + torch.tanh(k * x)) * torch.sin(ALPHA2 * np.pi * t)
 
 # 2. lbPINN model (adaptive loss weights) for 1D heat conduction
 class lbPINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(lbPINN, self).__init__()
+        super().__init__()
         self.activation = activation
         # Build network
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
@@ -186,17 +183,17 @@ class lbPINN(nn.Module):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-        
+
         # Adaptive weight parameters (3 loss terms: PDE, initial, boundary)
         self.log_var_pde = nn.Parameter(torch.tensor(0.0))
         self.log_var_initial = nn.Parameter(torch.tensor(0.0))
         self.log_var_boundary = nn.Parameter(torch.tensor(0.0))
         self.reg_coeff = 0.5
-    
+
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, t], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple:
         u = self.forward(x, t)
         u_t = torch.autograd.grad(
@@ -212,7 +209,7 @@ class lbPINN(nn.Module):
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
         return u_t, u_xx, u_x
-    
+
     def source_term(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         sin_alpha1pi_x = torch.sin(ALPHA1 * np.pi * x)
         tanh_kx = torch.tanh(k * x)
@@ -220,74 +217,74 @@ class lbPINN(nn.Module):
         cos_alpha2pi_t = torch.cos(ALPHA2 * np.pi * t)
 
         u_t_exact = (sin_alpha1pi_x + tanh_kx) * ALPHA2 * np.pi * cos_alpha2pi_t
-        
+
         sech_kx_sq = 1 / (torch.cosh(k * x) ** 2)
         u_xx_exact = (
-            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x 
+            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x
             - 2 * (k ** 2) * sech_kx_sq * tanh_kx
         ) * sin_alpha2pi_t
-        
+
         f = u_t_exact - u_xx_exact
         return f
-    
+
     def pde_residual(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         u_t, u_xx, _ = self.compute_gradients(x, t)
         f = self.source_term(x, t)
         return u_t - u_xx - f
-    
+
     def initial_residual(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         u_pred = self.forward(x, t0)
         u_exact = self.analytical_solution(x, t0)
         return u_pred - u_exact
-    
+
     def boundary_residual(self, t: torch.Tensor) -> torch.Tensor:
         x0 = torch.zeros_like(t, requires_grad=True)
         u0_pred = self.forward(x0, t)
         u0_exact = self.analytical_solution(x0, t)
-        
+
         x1 = torch.ones_like(t, requires_grad=True)
         u1_pred = self.forward(x1, t)
         u1_exact = self.analytical_solution(x1, t)
-        
+
         return torch.cat([u0_pred - u0_exact, u1_pred - u1_exact], dim=0)
-    
+
     def adaptive_loss(self, pde_data, initial_data, boundary_data) -> tuple:
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         pde_res = self.pde_residual(x_pde, t_pde)
         initial_res = self.initial_residual(x_initial, t_initial)
         boundary_res = self.boundary_residual(t_boundary)
-        
+
         # Adaptive weights
         raw_weight_pde = 0.5 * torch.exp(-self.log_var_pde)
         raw_weight_initial = 0.5 * torch.exp(-self.log_var_initial)
         raw_weight_boundary = 0.5 * torch.exp(-self.log_var_boundary)
-        
+
         # Weighted losses
         loss_pde = raw_weight_pde * torch.mean(pde_res ** 2)
         loss_initial = raw_weight_initial * torch.mean(initial_res ** 2)
         loss_boundary = raw_weight_boundary * torch.mean(boundary_res ** 2)
-        
+
         # Regularization term
         reg_term = self.reg_coeff * (
-            F.softplus(self.log_var_pde) + 
-            F.softplus(self.log_var_initial) + 
+            F.softplus(self.log_var_pde) +
+            F.softplus(self.log_var_initial) +
             F.softplus(self.log_var_boundary)
         )
-        
+
         # Total loss
         total_loss = loss_pde + loss_initial + loss_boundary + reg_term
         return total_loss, loss_pde, loss_initial, loss_boundary
-    
+
     def analytical_solution(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return (torch.sin(ALPHA1 * np.pi * x) + torch.tanh(k * x)) * torch.sin(ALPHA2 * np.pi * t)
 
 # 3. gPINN model (gradient constraint enhancement) for 1D heat conduction
 class gPINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation, grad_weight=0.01):
-        super(gPINN, self).__init__()
+        super().__init__()
         self.activation = activation
         self.grad_weight = grad_weight
         # Build network
@@ -296,11 +293,11 @@ class gPINN(nn.Module):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, t], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_high_order_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple:
         u = self.forward(x, t)
         u_t = torch.autograd.grad(
@@ -315,11 +312,11 @@ class gPINN(nn.Module):
             outputs=u_x, inputs=x, grad_outputs=torch.ones_like(u_x),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         # PDE residual and its gradients
         f = self.source_term(x, t)
         res = u_t - u_xx - f
-        
+
         res_x = torch.autograd.grad(
             outputs=res, inputs=x, grad_outputs=torch.ones_like(res),
             create_graph=True, retain_graph=True, only_inputs=True
@@ -328,9 +325,9 @@ class gPINN(nn.Module):
             outputs=res, inputs=t, grad_outputs=torch.ones_like(res),
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
-        
+
         return u_t, u_xx, res, res_x, res_t
-    
+
     def source_term(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         sin_alpha1pi_x = torch.sin(ALPHA1 * np.pi * x)
         tanh_kx = torch.tanh(k * x)
@@ -338,41 +335,41 @@ class gPINN(nn.Module):
         cos_alpha2pi_t = torch.cos(ALPHA2 * np.pi * t)
 
         u_t_exact = (sin_alpha1pi_x + tanh_kx) * ALPHA2 * np.pi * cos_alpha2pi_t
-        
+
         sech_kx_sq = 1 / (torch.cosh(k * x) ** 2)
         u_xx_exact = (
-            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x 
+            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x
             - 2 * (k ** 2) * sech_kx_sq * tanh_kx
         ) * sin_alpha2pi_t
-        
+
         f = u_t_exact - u_xx_exact
         return f
-    
+
     def pde_loss(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         _, _, res, _, _ = self.compute_high_order_gradients(x, t)
         return torch.mean(res ** 2)
-    
+
     def grad_loss(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         _, _, _, res_x, res_t = self.compute_high_order_gradients(x, t)
         grad_loss = torch.mean(res_x ** 2) + torch.mean(res_t ** 2)
         return self.grad_weight * grad_loss
-    
+
     def initial_loss(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         u_pred = self.forward(x, t0)
         u_exact = self.analytical_solution(x, t0)
         return torch.mean((u_pred - u_exact) ** 2)
-    
+
     def boundary_loss(self, t: torch.Tensor) -> torch.Tensor:
         x0 = torch.zeros_like(t, requires_grad=True)
         u0_pred = self.forward(x0, t)
         u0_exact = self.analytical_solution(x0, t)
-        
+
         x1 = torch.ones_like(t, requires_grad=True)
         u1_pred = self.forward(x1, t)
         u1_exact = self.analytical_solution(x1, t)
-        
+
         return torch.mean((u0_pred - u0_exact)**2 + (u1_pred - u1_exact)**2)
-    
+
     def analytical_solution(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return (torch.sin(ALPHA1 * np.pi * x) + torch.tanh(k * x)) * torch.sin(ALPHA2 * np.pi * t)
 
@@ -380,11 +377,11 @@ class gPINN(nn.Module):
 class LiquidResidualBlock(nn.Module):
     """Lightweight Liquid Residual Gating Block (core of LNN-PINN)"""
     def __init__(self, hidden_dim, activation):
-        super(LiquidResidualBlock, self).__init__()
+        super().__init__()
         self.hidden_dim = hidden_dim
-        self.activation = activation  
-        self.linear = nn.Linear(hidden_dim, hidden_dim)  
-        
+        self.activation = activation
+        self.linear = nn.Linear(hidden_dim, hidden_dim)
+
         # Learnable gating parameters
         self.alpha = nn.Parameter(torch.ones(1, hidden_dim) * 0.9)
         self.beta = nn.Parameter(torch.ones(1, hidden_dim) * 0.1)
@@ -394,19 +391,19 @@ class LiquidResidualBlock(nn.Module):
         residual = x
         new_features = self.linear(x)
         new_features = self.activation(new_features)
-        
+
         # Liquid gating fusion
         alpha = self.softplus(self.alpha)
         beta = self.softplus(self.beta)
         gated_features = alpha * residual + beta * new_features
-        
+
         output = self.activation(gated_features)
         return output
 
 class LNN_PINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(LNN_PINN, self).__init__()
-        self.activation = activation  
+        super().__init__()
+        self.activation = activation
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         self.input_layer = nn.Linear(input_dim, hidden_dim)
@@ -414,7 +411,7 @@ class LNN_PINN(nn.Module):
         for _ in range(n_layers - 1):
             self.hidden_blocks.append(LiquidResidualBlock(hidden_dim, activation))
         self.output_layer = nn.Linear(hidden_dim, output_dim)
-    
+
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, t], dim=1)
         x = self.input_layer(input_tensor)
@@ -423,7 +420,7 @@ class LNN_PINN(nn.Module):
             x = block(x)
         x = self.output_layer(x)
         return x
-    
+
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple:
         u = self.forward(x, t)
         u_t = torch.autograd.grad(
@@ -439,7 +436,7 @@ class LNN_PINN(nn.Module):
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
         return u_t, u_xx, u_x
-    
+
     def source_term(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         sin_alpha1pi_x = torch.sin(ALPHA1 * np.pi * x)
         tanh_kx = torch.tanh(k * x)
@@ -447,62 +444,62 @@ class LNN_PINN(nn.Module):
         cos_alpha2pi_t = torch.cos(ALPHA2 * np.pi * t)
 
         u_t_exact = (sin_alpha1pi_x + tanh_kx) * ALPHA2 * np.pi * cos_alpha2pi_t
-        
+
         sech_kx_sq = 1 / (torch.cosh(k * x) ** 2)
         u_xx_exact = (
-            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x 
+            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x
             - 2 * (k ** 2) * sech_kx_sq * tanh_kx
         ) * sin_alpha2pi_t
-        
+
         f = u_t_exact - u_xx_exact
         return f
-    
+
     def analytical_solution(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return (torch.sin(ALPHA1 * np.pi * x) + torch.tanh(k * x)) * torch.sin(ALPHA2 * np.pi * t)
 
 # 5. STAR-PINN model (Stacked Adaptive Residual PINN) for 1D heat conduction
 class LightweightPINNBlock(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(LightweightPINNBlock, self).__init__()
+        super().__init__()
         self.activation = activation
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
         for _ in range(n_layers - 1):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x):
         return self.layers(x)
 
 class STAR_PINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers_per_block, activation, n_blocks=3):
-        super(STAR_PINN, self).__init__()
+        super().__init__()
         self.n_blocks = n_blocks
         self.activation = activation
-        
+
         # Create stacked lightweight PINN blocks
         self.pinn_blocks = nn.ModuleList([
             LightweightPINNBlock(input_dim, output_dim, hidden_dim, n_layers_per_block, activation)
             for _ in range(n_blocks)
         ])
-        
+
         # Adaptive residual weights
         self.adaptive_weights = nn.Parameter(torch.ones(n_blocks - 1) * 0.5)
-    
+
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, t], dim=1)
-        
+
         # Output of the first block
         current_output = self.pinn_blocks[0](input_tensor)
-        
+
         # Subsequent blocks: residual fusion
         for i in range(1, self.n_blocks):
             block_output = self.pinn_blocks[i](input_tensor)
             alpha = torch.sigmoid(self.adaptive_weights[i-1])
             current_output = block_output + alpha * current_output
-        
+
         return current_output
-    
+
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple:
         u = self.forward(x, t)
         u_t = torch.autograd.grad(
@@ -518,7 +515,7 @@ class STAR_PINN(nn.Module):
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
         return u_t, u_xx, u_x
-    
+
     def source_term(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         sin_alpha1pi_x = torch.sin(ALPHA1 * np.pi * x)
         tanh_kx = torch.tanh(k * x)
@@ -526,16 +523,16 @@ class STAR_PINN(nn.Module):
         cos_alpha2pi_t = torch.cos(ALPHA2 * np.pi * t)
 
         u_t_exact = (sin_alpha1pi_x + tanh_kx) * ALPHA2 * np.pi * cos_alpha2pi_t
-        
+
         sech_kx_sq = 1 / (torch.cosh(k * x) ** 2)
         u_xx_exact = (
-            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x 
+            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x
             - 2 * (k ** 2) * sech_kx_sq * tanh_kx
         ) * sin_alpha2pi_t
-        
+
         f = u_t_exact - u_xx_exact
         return f
-    
+
     def analytical_solution(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return (torch.sin(ALPHA1 * np.pi * x) + torch.tanh(k * x)) * torch.sin(ALPHA2 * np.pi * t)
 
@@ -553,31 +550,31 @@ class GMMCurriculumWeight:
 
     def compute_weights(self, residuals: torch.Tensor, tau: float) -> torch.Tensor:
         res_np = residuals.detach().cpu().numpy().reshape(-1, 1)
-        
+
         try:
             self.gmm.fit(res_np)
             gamma = self.gmm.predict_proba(res_np)
             sigma_sq = self.gmm.covariances_.flatten()
-            
+
             # Compute component difficulty
             res_squared = res_np.flatten() ** 2
             component_difficulty = np.array([
                 np.sum(gamma[:, j] * res_squared) / (np.sum(gamma[:, j]) + self.epsilon)
                 for j in range(self.n_components)
             ])
-            
+
             # Normalize difficulty
             diff_min, diff_max = component_difficulty.min(), component_difficulty.max()
             if diff_max - diff_min > self.epsilon:
                 normalized_diff = (component_difficulty - diff_min) / (diff_max - diff_min)
             else:
                 normalized_diff = np.zeros_like(component_difficulty)
-            
+
             # Curriculum learning weights
             easy_weight = np.exp(-self.beta * normalized_diff)
             hard_weight = np.exp(-self.beta * (1 - normalized_diff))
             curriculum_weight = (1 - tau) * easy_weight + tau * hard_weight
-            
+
             # Variance factor
             if self.use_variance_factor:
                 variance_factor = 1 / (sigma_sq + self.epsilon)
@@ -586,7 +583,7 @@ class GMMCurriculumWeight:
                 component_weights = curriculum_weight * effective_variance_factor
             else:
                 component_weights = curriculum_weight
-            
+
             # Sample weights
             point_weights = np.sum(gamma * component_weights[np.newaxis, :], axis=1)
             self._last_valid_weights = point_weights.copy()
@@ -596,7 +593,7 @@ class GMMCurriculumWeight:
                 point_weights = self._last_valid_weights
             else:
                 point_weights = np.ones(len(res_np))
-        
+
         # Normalize weights
         point_weights = point_weights / (point_weights.mean() + self.epsilon)
         return torch.tensor(point_weights.reshape(-1, 1), dtype=torch.float32).to(residuals.device)
@@ -612,22 +609,22 @@ class ReLoBRaLoWeights:
         self.ema_losses = None
         self.initial_losses = None
         self.weights = torch.ones(n_losses, device=device, dtype=torch.float32)
-    
+
     def update(self, losses):
         losses_tensor = torch.tensor(losses, device=self.device, dtype=torch.float32)
-        
+
         for i, loss in enumerate(losses):
             self.loss_history[i].append(loss)
-        
+
         # Initialization
         if self.initial_losses is None:
             self.initial_losses = losses_tensor.clone()
             self.ema_losses = losses_tensor.clone()
             return
-        
+
         # Update EMA losses
         self.ema_losses = self.alpha * self.ema_losses + (1 - self.alpha) * losses_tensor
-        
+
         # Random lookback
         if np.random.rand() < self.rho:
             reference = self.ema_losses
@@ -637,7 +634,7 @@ class ReLoBRaLoWeights:
                 [self.loss_history[i][lookback_idx] for i in range(self.n_losses)],
                 device=self.device, dtype=torch.float32
             )
-        
+
         # Calculate relative changes and weights
         relative_losses = losses_tensor / (reference + 1e-8)
         scaled_losses = relative_losses / self.temperature
@@ -645,34 +642,34 @@ class ReLoBRaLoWeights:
 
 class CGMPINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation, use_curriculum=True, gmm_kwargs=None, relobralo_kwargs=None):
-        super(CGMPINN, self).__init__()
+        super().__init__()
         self.activation = activation
         self.use_curriculum = use_curriculum
         self.current_tau = 0.0
         self.latest_pde_loss = None
         self.latest_initial_loss = None
         self.latest_boundary_loss = None
-        
+
         # Build network
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
         for _ in range(n_layers - 1):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-        
+
         # GMM curriculum learning initialization
         gmm_kwargs = gmm_kwargs or {}
         self.curriculum_weight = GMMCurriculumWeight(**gmm_kwargs)
         self.sample_weights = None
-        
+
         # ReLoBRaLo initialization (3 loss terms for heat conduction)
         relobralo_kwargs = relobralo_kwargs or {}
         self.relobralo = ReLoBRaLoWeights(**relobralo_kwargs)
-    
+
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         input_tensor = torch.cat([x, t], dim=1)
         return self.layers(input_tensor)
-    
+
     def compute_gradients(self, x: torch.Tensor, t: torch.Tensor) -> tuple:
         u = self.forward(x, t)
         u_t = torch.autograd.grad(
@@ -688,7 +685,7 @@ class CGMPINN(nn.Module):
             create_graph=True, retain_graph=True, only_inputs=True
         )[0]
         return u_t, u_xx, u_x
-    
+
     def source_term(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         sin_alpha1pi_x = torch.sin(ALPHA1 * np.pi * x)
         tanh_kx = torch.tanh(k * x)
@@ -696,80 +693,80 @@ class CGMPINN(nn.Module):
         cos_alpha2pi_t = torch.cos(ALPHA2 * np.pi * t)
 
         u_t_exact = (sin_alpha1pi_x + tanh_kx) * ALPHA2 * np.pi * cos_alpha2pi_t
-        
+
         sech_kx_sq = 1 / (torch.cosh(k * x) ** 2)
         u_xx_exact = (
-            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x 
+            - (ALPHA1 ** 2) * (np.pi ** 2) * sin_alpha1pi_x
             - 2 * (k ** 2) * sech_kx_sq * tanh_kx
         ) * sin_alpha2pi_t
-        
+
         f = u_t_exact - u_xx_exact
         return f
-    
+
     def update_curriculum_weights(self, x: torch.Tensor, t: torch.Tensor) -> None:
         if not self.use_curriculum:
             return
         u_t, u_xx, _ = self.compute_gradients(x, t)
         pde_residual = u_t - u_xx - self.source_term(x, t)
         self.sample_weights = self.curriculum_weight.compute_weights(pde_residual, self.current_tau)
-    
+
     def set_training_progress(self, current_step: int, total_steps: int) -> None:
         if total_steps == 0:
             self.current_tau = 0.0
         else:
             tau_base = total_steps * self.curriculum_weight.tau_saturation
             self.current_tau = min(current_step / tau_base, 1.0)
-    
+
     def pde_loss(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         u_t, u_xx, _ = self.compute_gradients(x, t)
         f = self.source_term(x, t)
         pde_residual = u_t - u_xx - f
-        
+
         if self.use_curriculum and self.sample_weights is not None:
             weighted_residual = self.sample_weights.detach() * (pde_residual ** 2)
             pde_loss_val = torch.mean(weighted_residual)
         else:
             pde_loss_val = torch.mean(pde_residual ** 2)
-        
+
         self.latest_pde_loss = pde_loss_val.item()
         return pde_loss_val
-    
+
     def initial_loss(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         u_pred = self.forward(x, t0)
         u_exact = self.analytical_solution(x, t0)
         initial_loss_val = torch.mean((u_pred - u_exact) ** 2)
         self.latest_initial_loss = initial_loss_val.item()
         return initial_loss_val
-    
+
     def boundary_loss(self, t: torch.Tensor) -> torch.Tensor:
         x0 = torch.zeros_like(t, requires_grad=True).to(next(self.parameters()).device)
         u0_pred = self.forward(x0, t)
         u0_exact = self.analytical_solution(x0, t)
-        
+
         x1 = torch.ones_like(t, requires_grad=True).to(next(self.parameters()).device)
         u1_pred = self.forward(x1, t)
         u1_exact = self.analytical_solution(x1, t)
-        
+
         boundary_loss_val = torch.mean((u0_pred - u0_exact)**2 + (u1_pred - u1_exact)**2)
         self.latest_boundary_loss = boundary_loss_val.item()
         return boundary_loss_val
-    
+
     def compute_weighted_total_loss(self, pde_data, initial_data, boundary_data) -> torch.Tensor:
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         pde_loss_val = self.pde_loss(x_pde, t_pde)
         initial_loss_val = self.initial_loss(x_initial, t_initial)
         boundary_loss_val = self.boundary_loss(t_boundary)
-        
+
         # Update ReLoBRaLo weights (3 loss terms)
         current_losses = [self.latest_pde_loss, self.latest_initial_loss, self.latest_boundary_loss]
         self.relobralo.update(current_losses)
         weights = self.relobralo.weights.detach()
-        
+
         return weights[0] * pde_loss_val + weights[1] * initial_loss_val + weights[2] * boundary_loss_val
-    
+
     def analytical_solution(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return (torch.sin(ALPHA1 * np.pi * x) + torch.tanh(k * x)) * torch.sin(ALPHA2 * np.pi * t)
 
@@ -830,12 +827,12 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
     model_names = ["PINN", "lbPINN", "gPINN", "LNN-PINN", "STAR-PINN", "CGMPINN"]
     x_test, t_test = test_data
     n_test = int(np.sqrt(len(x_test)))
-    
+
     # Reshape test data for plotting
     x_test_grid = x_test.numpy().reshape(n_test, n_test)
     t_test_grid = t_test.numpy().reshape(n_test, n_test)
     u_exact_grid = u_exact_np.reshape(n_test, n_test)
-    
+
     # 1. Loss curve comparison
     plt.figure(figsize=(12, 6))
     for i, loss_history in enumerate(loss_histories_list):
@@ -853,21 +850,21 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
     plt.tight_layout()
     save_figure("comparison_group_loss")
     plt.show()
-    
+
     # 2. Solution and error comparison (2D heatmap)
     n_models = min(len(solution_results_list), len(model_names))
     fig, axes = plt.subplots(n_models, 3, figsize=(18, 4 * n_models))
     # fig.suptitle("1D Heat Conduction - Solution Comparison", fontsize=16, y=0.98)
-    
+
     for idx in range(n_models):
         result = solution_results_list[idx]
         u_pred = result["u_pred"]
         pointwise_error = result["pointwise_error"]
-        
+
         # Reshape to grid
         u_pred_grid = u_pred.reshape(n_test, n_test)
         error_grid = pointwise_error.reshape(n_test, n_test)
-        
+
         # Solution comparison (heatmap)
         ax1 = axes[idx, 0]
         im1 = ax1.pcolormesh(t_test_grid, x_test_grid, u_pred_grid, cmap=cm.jet, shading='gouraud')
@@ -875,7 +872,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
         ax1.set_ylabel("Position (x)", fontsize=10)
         ax1.set_title(f"{model_names[idx]} - Prediction", fontsize=12)
         plt.colorbar(im1, ax=ax1, shrink=0.8)
-        
+
         # Exact solution
         ax2 = axes[idx, 1]
         im2 = ax2.pcolormesh(t_test_grid, x_test_grid, u_exact_grid, cmap=cm.jet, shading='gouraud')
@@ -883,7 +880,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
         ax2.set_ylabel("Position (x)", fontsize=10)
         ax2.set_title("Analytical Solution", fontsize=12)
         plt.colorbar(im2, ax=ax2, shrink=0.8)
-        
+
         # Error map
         ax3 = axes[idx, 2]
         im3 = ax3.pcolormesh(t_test_grid, x_test_grid, error_grid, cmap=cm.RdBu_r, shading='gouraud')
@@ -891,7 +888,7 @@ def plot_comparison_group(loss_histories_list, solution_results_list, test_data,
         ax3.set_ylabel("Position (x)", fontsize=10)
         ax3.set_title(f"{model_names[idx]} - Absolute Error", fontsize=12)
         plt.colorbar(im3, ax=ax3, shrink=0.8)
-    
+
     plt.tight_layout()
     plt.subplots_adjust(top=0.93)
     save_figure("comparison_group_solution")
@@ -901,35 +898,31 @@ def plot_error_analysis_group(solution_results_list, test_data, model_names=None
     if model_names is None:
         model_names = ["PINN", "lbPINN", "gPINN", "LNN-PINN", "STAR-PINN", "CGMPINN"]
     n_models = min(len(solution_results_list), len(model_names))
-    
+
     x_test_flat, t_test_flat = test_data
     n_test = int(np.sqrt(len(x_test_flat)))
-    
-    x_grid = x_test_flat.numpy().reshape(n_test, n_test)
-    t_grid = t_test_flat.numpy().reshape(n_test, n_test)
-    
+
+
     x_vals = np.linspace(0, 1, n_test)
     t_vals = np.linspace(0, 1, n_test)
-    
+
     fig, axes = plt.subplots(n_models, 3, figsize=(18, 4 * n_models))
     # fig.suptitle('Model Error Analysis (1D Heat Conduction)', fontsize=18, y=0.98)
-    
+
     for idx in range(n_models):
         result = solution_results_list[idx]
         error_flat = result["pointwise_error"]
-        l2_error = result["l2_error"]
-        linf_error = result["linf_error"]
         current_model = model_names[idx]
-        
+
         error_grid = error_flat.reshape(n_test, n_test)
-        
+
         # left column: Error distribution histogram
         ax1 = axes[idx, 0] if n_models > 1 else axes[0]
-        ax1.hist(error_flat, bins=50, color='steelblue', 
+        ax1.hist(error_flat, bins=50, color='steelblue',
                  edgecolor='black', alpha=0.7, density=True)
-        ax1.axvline(error_flat.mean(), color='r', linestyle='--', 
+        ax1.axvline(error_flat.mean(), color='r', linestyle='--',
                     linewidth=2, label=f'Mean: {error_flat.mean():.2e}')
-        ax1.axvline(np.median(error_flat), color='orange', linestyle=':', 
+        ax1.axvline(np.median(error_flat), color='orange', linestyle=':',
                     linewidth=2, label=f'Median: {np.median(error_flat):.2e}')
         ax1.set_xlabel('Absolute Error', fontsize=12)
         ax1.set_ylabel('Probability Density', fontsize=12)
@@ -945,11 +938,11 @@ def plot_error_analysis_group(solution_results_list, test_data, model_names=None
         # middle column: Error evolution over time
         ax2 = axes[idx, 1] if n_models > 1 else axes[1]
         # Calculate mean and max error for each time point
-        error_mean_over_t = np.mean(error_grid, axis=0)  
-        error_max_over_t = np.max(error_grid, axis=0)    
-        
+        error_mean_over_t = np.mean(error_grid, axis=0)
+        error_max_over_t = np.max(error_grid, axis=0)
+
         ax2.plot(t_vals, error_mean_over_t, 'b-', linewidth=2, label='Mean Error')
-        ax2.fill_between(t_vals, error_mean_over_t, error_max_over_t, 
+        ax2.fill_between(t_vals, error_mean_over_t, error_max_over_t,
                          alpha=0.3, color='blue', label='Max Error Range')
         ax2.set_xlabel('Time $t$', fontsize=12)
         ax2.set_ylabel('Error (Log Scale)', fontsize=12)
@@ -957,21 +950,21 @@ def plot_error_analysis_group(solution_results_list, test_data, model_names=None
         ax2.legend(fontsize=10)
         ax2.set_yscale('log')
         ax2.grid(True, alpha=0.3)
-        
+
         # right column: Error distribution over space
         ax3 = axes[idx, 2] if n_models > 1 else axes[2]
-        error_mean_over_x = np.mean(error_grid, axis=1)  
-        error_max_over_x = np.max(error_grid, axis=1)    
-        
+        error_mean_over_x = np.mean(error_grid, axis=1)
+        error_max_over_x = np.max(error_grid, axis=1)
+
         ax3.plot(x_vals, error_mean_over_x, 'g-', linewidth=2, label='Mean Error')
-        ax3.fill_between(x_vals, error_mean_over_x, error_max_over_x, 
+        ax3.fill_between(x_vals, error_mean_over_x, error_max_over_x,
                          alpha=0.3, color='green', label='Max Error Range')
         ax3.set_xlabel('Position $x$', fontsize=12)
         ax3.set_ylabel('Error', fontsize=12)
         ax3.set_title(f'{current_model} - Error Distribution', fontsize=13)
         ax3.legend(fontsize=10)
         ax3.grid(True, alpha=0.3)
-    
+
     plt.tight_layout()
     plt.subplots_adjust(top=0.93)
     save_figure("error_analysis_group")
@@ -984,16 +977,16 @@ def generate_training_data(n_pde=1500, n_initial=300, n_boundary=300):
     x_pde = torch.rand(n_pde, 1, requires_grad=True)
     t_pde = torch.rand(n_pde, 1, requires_grad=True)
     pde_data = (x_pde, t_pde)
-    
+
     # Initial condition points (t=0, x∈[0,1])
     x_initial = torch.rand(n_initial, 1, requires_grad=True)
     t_initial = torch.zeros_like(x_initial, requires_grad=True)
     initial_data = (x_initial, t_initial)
-    
+
     # Boundary condition points (x=0/1, t∈[0,1])
     t_boundary = torch.rand(n_boundary, 1, requires_grad=True)
     boundary_data = t_boundary
-    
+
     return pde_data, initial_data, boundary_data
 
 # Main execution function
@@ -1002,24 +995,24 @@ def main():
     tanh_activation = TanhActivation()
     test_data = generate_test_data(N_TEST)
     x_test, t_test = test_data
-    device = torch.device("cpu") 
-    
+    device = torch.device("cpu")
+
     # Generate training data (for loss calculation in demo)
     pde_data, initial_data, boundary_data = generate_training_data()
-    
+
     # GMM and ReLoBRaLo parameters (3 loss terms for heat conduction)
     gmm_kwargs = {"n_components":4, "update_interval":200, "beta":1.0, "tau_saturation":0.8}
     relobralo_kwargs = {"n_losses":3, "alpha":0.999, "temperature":1.0, "rho":0.99, "device":device}
-    
+
     # 2. Compute analytical solution (for comparison)
     temp_model = PINN(INPUT_DIM, OUTPUT_DIM, HIDDEN_DIM, N_LAYERS, tanh_activation)
     u_exact = temp_model.analytical_solution(x_test, t_test)
     u_exact_np = u_exact.numpy()
-    
+
     # 3. Construct weight file paths
     data_dir = PARAMETER_DIR
     os.makedirs(data_dir, exist_ok=True)
-    
+
     # Define loading configurations for each model
     model_load_configs = {
         "PINN": {
@@ -1094,12 +1087,12 @@ def main():
             "weight_path": os.path.join(data_dir, "1D_heat_tanh_adam2lbfgs_cgmpinn.pth")
         }
     }
-    
+
     # 4. Load models, evaluate, and store results
     loss_histories = {}
     solution_results = {}
     run_times = {}
-    
+
     for model_name, config in model_load_configs.items():
         print(f"\n🔍 Loading model: {model_name}")
         model, aux_info = load_pinn_model(
@@ -1108,7 +1101,7 @@ def main():
             weight_path=config["weight_path"],
             device=device
         )
-        
+
         if model is None:
             u_pred_np = np.zeros_like(u_exact_np)
             pointwise_error = np.zeros_like(u_exact_np)
@@ -1123,11 +1116,11 @@ def main():
             x_test_device = x_test.to(device)
             t_test_device = t_test.to(device)
             u_exact_device = u_exact.to(device)
-            
+
             metrics = evaluate_model(model, (x_test_device, t_test_device), u_exact_device)
             l2_error, l2rel_error, linf_error, pointwise_error, u_pred_np = metrics
             loss_history = aux_info.get('loss_history', [])
-            
+
             # Process loss history
             if isinstance(loss_history, list) and len(loss_history) > 0:
                 first_item = loss_history[0]
@@ -1141,10 +1134,10 @@ def main():
             else:
                 # Generate simulated loss curve
                 loss_history = np.logspace(0, -4, 1000).tolist()
-            
+
             run_time = aux_info.get('training_time', 0.0)
             final_train_loss = aux_info.get('final_total_loss', float('inf'))
-        
+
         # Save data
         loss_histories[model_name] = loss_history
         run_times[model_name] = run_time
@@ -1156,7 +1149,7 @@ def main():
             "linf_error": linf_error,
             "final_train_loss": final_train_loss
         }
-    
+
     # 5. Plot comparison figures
     group_losses = [
         loss_histories["PINN"],

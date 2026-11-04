@@ -51,37 +51,37 @@ def fisher_kpp_exact_solution(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
     z = LAMBDA * (x - c * t)
     z_clamped = torch.clamp(z, min=-50, max=50)  # Numerical stability
     exp_z = torch.exp(z_clamped)
-    u = 1.0 / (1.0 + exp_z) ** 2  
+    u = 1.0 / (1.0 + exp_z) ** 2
     return u
 
 # Lightweight PINN block (basic module of STAR-PINN)
 class LightweightPINNBlock(nn.Module):
     """Lightweight PINN block for stacked adaptive residual structure in STAR-PINN"""
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers, activation):
-        super(LightweightPINNBlock, self).__init__()
+        super().__init__()
         self.activation = activation
         layers = [nn.Linear(input_dim, hidden_dim), self.activation]
         for _ in range(n_layers - 1):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), self.activation])
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.layers = nn.Sequential(*layers)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.layers(x)
 
 # STAR-PINN model
 class STAR_PINN(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, n_layers_per_block, activation, n_blocks=3):
-        super(STAR_PINN, self).__init__()
+        super().__init__()
         self.n_blocks = n_blocks  # Number of stacked PINN blocks
         self.activation = activation
-        
+
         # Create stacked lightweight PINN blocks
         self.pinn_blocks = nn.ModuleList([
             LightweightPINNBlock(input_dim, output_dim, hidden_dim, n_layers_per_block, activation)
             for _ in range(n_blocks)
         ])
-        
+
         # Adaptive residual weights (trainable, initialized to 0.5)
         self.adaptive_weights = nn.Parameter(torch.ones(n_blocks - 1) * 0.5)
 
@@ -115,13 +115,13 @@ class STAR_PINN(nn.Module):
         u, u_t, u_xx = self.compute_gradients(x, t)
         pde_residual = u_t - D * u_xx - r * u * (1 - u)
         return torch.mean(pde_residual ** 2)
-    
+
     def initial_loss(self, x: torch.Tensor, t0: torch.Tensor) -> torch.Tensor:
         u_pred = self.forward(x, t0)
         u_exact = fisher_kpp_exact_solution(x, t0)
         initial_residual = u_pred - u_exact
         return torch.mean(initial_residual ** 2)
-    
+
     def boundary_loss(self, t: torch.Tensor) -> torch.Tensor:
         x_left = torch.full_like(t, x_min, requires_grad=True)
         u_left_pred = self.forward(x_left, t)
@@ -137,13 +137,13 @@ class STAR_PINN(nn.Module):
         x_pde, t_pde = pde_data
         x_initial, t_initial = initial_data
         t_boundary = boundary_data
-        
+
         with torch.enable_grad():
             pde_loss_val = self.pde_loss(x_pde, t_pde).item()
             initial_loss_val = self.initial_loss(x_initial, t_initial).item()
             boundary_loss_val = self.boundary_loss(t_boundary).item()
             total_loss_val = pde_loss_val + initial_loss_val + boundary_loss_val
-        
+
         return total_loss_val, pde_loss_val, initial_loss_val, boundary_loss_val
 
 # Data generation
@@ -151,31 +151,31 @@ def generate_data(
     n_pde: int,
     n_initial: int,
     n_boundary: int,
-    n_test: int 
+    n_test: int
 ) -> tuple:
     x_pde = (x_max - x_min) * torch.rand(n_pde, 1) + x_min
     t_pde = (t_max - t_min) * torch.rand(n_pde, 1) + t_min
     x_pde.requires_grad_(True)
     t_pde.requires_grad_(True)
     pde_data = (x_pde, t_pde)
-    
+
     x_initial = (x_max - x_min) * torch.rand(n_initial, 1) + x_min
     t_initial = torch.zeros_like(x_initial)
     x_initial.requires_grad_(True)
     t_initial.requires_grad_(True)
     initial_data = (x_initial, t_initial)
-    
+
     t_boundary = (t_max - t_min) * torch.rand(n_boundary, 1) + t_min
     t_boundary.requires_grad_(True)
     boundary_data = t_boundary
-    
+
     x_test = torch.linspace(x_min, x_max, n_test).reshape(-1, 1)
     t_test = torch.linspace(t_min, t_max, n_test).reshape(-1, 1)
     x_test_grid, t_test_grid = torch.meshgrid(x_test.squeeze(), t_test.squeeze(), indexing='ij')
     x_test_flat = x_test_grid.reshape(-1, 1)
     t_test_flat = t_test_grid.reshape(-1, 1)
     test_data = (x_test_flat, t_test_flat)
-    
+
     return pde_data, initial_data, boundary_data, test_data
 
 # Training function (adapted for STAR-PINN)
@@ -198,13 +198,13 @@ def train_with_optimizer(
         initial_loss = model.initial_loss(x_initial, t_initial)
         boundary_loss = model.boundary_loss(t_boundary)
         total_loss = pde_loss + initial_loss + boundary_loss
-        
+
         optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()
-        
+
         loss_history.append(total_loss.item())
-        
+
         if (epoch + 1) % 1000 == 0:
             print(
                 f'Epoch {epoch+1:4d} | Total Loss: {total_loss.item():.2e} | '
@@ -235,12 +235,12 @@ def train_with_lbfgs(
         boundary_loss = model.boundary_loss(t_boundary)
         total_loss = pde_loss + initial_loss + boundary_loss
         total_loss.backward()
-        
+
         pde_loss_val = pde_loss.item()
         initial_loss_val = initial_loss.item()
         boundary_loss_val = boundary_loss.item()
         return total_loss
-    
+
     optimizer = optim.LBFGS(
         model.parameters(),
         max_iter=1,
@@ -248,12 +248,12 @@ def train_with_lbfgs(
         line_search_fn='strong_wolfe',
         lr=lr
     )
-    
+
     for iter_idx in range(max_iter):
         total_loss = optimizer.step(closure)
         current_loss = total_loss.item()
         loss_history.append(current_loss)
-        
+
         if (iter_idx + 1) % 500 == 0 or iter_idx == 0:
             print(
                 f'Iteration {iter_idx+1}/{max_iter} | Total Loss: {current_loss:.2e} | '
@@ -278,14 +278,14 @@ def train_adam_lbfgs(
         pde_data=pde_data, initial_data=initial_data, boundary_data=boundary_data,
         loss_history=loss_history
     )
-    
+
     print("\n=== Phase 2: L-BFGS Local Refinement ===")
     train_with_lbfgs(
         model=model, pde_data=pde_data, initial_data=initial_data, boundary_data=boundary_data,
         loss_history=loss_history, lr=lr_lbfgs, max_iter=lbfgs_max_iter
     )
 
-# Evaluation function (adapted for STAR-PINN) 
+# Evaluation function (adapted for STAR-PINN)
 def evaluate_model(
     model: STAR_PINN,
     test_data: tuple,
@@ -301,7 +301,7 @@ def evaluate_model(
         linf_error = torch.max(torch.abs(u_pred - u_exact)).item()
         pointwise_error = torch.abs(u_pred - u_exact).numpy()
         u_pred_np = u_pred.numpy()
-    
+
     return l2_error, l2_relative_error, linf_error, pointwise_error, u_pred_np
 
 # Visualization functions
@@ -328,11 +328,11 @@ def plot_solutions_by_activation_and_optimizer(
 ) -> None:
     x_test, t_test = test_data
     n_test = int(np.sqrt(len(x_test)))
-    
+
     for activation_name, results in activation_results.items():
         fig, axes = plt.subplots(3, 3, figsize=(20, 14))
         fig.suptitle(f'Solution Comparison - Activation: {activation_name}', fontsize=24, y=0.99)
-        
+
         for idx, optim_label in enumerate(optim_labels):
             u_pred = results[optim_label]['u_pred']
             u_pred_grid = u_pred.reshape(n_test, n_test)
@@ -340,55 +340,55 @@ def plot_solutions_by_activation_and_optimizer(
             error_grid = np.abs(u_pred_grid - u_exact_grid)
             x_grid = x_test.reshape(n_test, n_test)
             t_grid = t_test.reshape(n_test, n_test)
-            
+
             ax1 = axes[idx, 0]
             im1 = ax1.pcolormesh(t_grid, x_grid, u_pred_grid, cmap=cm.jet, shading='gouraud', vmin=0, vmax=1)
             ax1.set_xlabel('Time (t)', fontsize=10)
             ax1.set_ylabel('Position (x)', fontsize=10)
             ax1.set_title(f'{optim_label} - Predicted', fontsize=12)
             plt.colorbar(im1, ax=ax1, shrink=0.6, aspect=5)
-            
+
             ax2 = axes[idx, 1]
             im2 = ax2.pcolormesh(t_grid, x_grid, u_exact_grid, cmap=cm.jet, shading='gouraud', vmin=0, vmax=1)
             ax2.set_title('Traveling Wave Exact Solution', fontsize=12)
             plt.colorbar(im2, ax=ax2, shrink=0.6, aspect=5)
             ax2.set_xlabel('Time (t)', fontsize=10)
             ax2.set_ylabel('Position (x)', fontsize=10)
-            
+
             ax3 = axes[idx, 2]
             im3 = ax3.pcolormesh(t_grid, x_grid, error_grid, cmap=cm.viridis, shading='gouraud')
             ax3.set_xlabel('Time (t)', fontsize=10)
             ax3.set_ylabel('Position (x)', fontsize=10)
             ax3.set_title(f'{optim_label} - Absolute Error', fontsize=12)
             plt.colorbar(im3, ax=ax3, shrink=0.6, aspect=5)
-        
+
         plt.tight_layout()
         plt.subplots_adjust(top=0.95)
         save_figure(f"solutions_{activation_name}")
         plt.show()
 
-# Main function (adapted for STAR-PINN hyperparameters) 
+# Main function (adapted for STAR-PINN hyperparameters)
 def train_1D_fisher_kpp_STAR_PINN():
-    n_layers_per_block = 2    
-    input_dim = 2             
-    output_dim = 1             
+    n_layers_per_block = 2
+    input_dim = 2
+    output_dim = 1
     hidden_dim = 80
-    n_pde = 8000              
-    n_initial = 400            
-    n_boundary = 400           
-    n_test = 100               
-    lr_lbfgs_config = {'Tanh': 1.0}  
-    lr_adam_lbfgs = 0.8        
-    epochs_adam = 20000        
-    max_iter_lbfgs = 20000    
-    adam_lbfgs_adam_epochs = 8000   
-    adam_lbfgs_lbfgs_iter = 12000  
+    n_pde = 8000
+    n_initial = 400
+    n_boundary = 400
+    n_test = 100
+    lr_lbfgs_config = {'Tanh': 1.0}
+    lr_adam_lbfgs = 0.8
+    epochs_adam = 20000
+    max_iter_lbfgs = 20000
+    adam_lbfgs_adam_epochs = 8000
+    adam_lbfgs_lbfgs_iter = 12000
 
     # Activation functions and optimizer labels (adapted for STAR-PINN)
     activations = {'Tanh': TanhActivation()}
     activation_names = list(activations.keys())
     optim_labels = ['Adam (STAR-PINN)', 'L-BFGS (STAR-PINN)', 'Adam→L-BFGS (STAR-PINN)']
-    
+
     # Generate data
     print("Generating training/testing data for the Fisher-KPP equation...")
     pde_data, initial_data, boundary_data, test_data = generate_data(
@@ -397,12 +397,12 @@ def train_1D_fisher_kpp_STAR_PINN():
     x_test, t_test = test_data
     u_exact = fisher_kpp_exact_solution(x_test, t_test)
     u_exact_np = u_exact.numpy()
-    
+
     # Results storage
     activation_loss_histories = {}
     activation_results = {}
     activation_training_times = {}
-    
+
     # Train all optimizers for each activation function
     for activation_name, activation_fn in activations.items():
         print("\n" + "="*80)
@@ -412,7 +412,7 @@ def train_1D_fisher_kpp_STAR_PINN():
         current_loss_histories = []
         current_results = {}
         current_training_times = []
-        
+
         # 4.1 Pure Adam training
         print(f"\n--- {activation_name} + Adam ---")
         model_adam = STAR_PINN(input_dim, output_dim, hidden_dim, n_layers_per_block, activation_fn)
@@ -437,7 +437,7 @@ def train_1D_fisher_kpp_STAR_PINN():
         }
         current_loss_histories.append(loss_history_adam)
         print(f"Adam training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.2 Pure L-BFGS training
         print(f"\n--- {activation_name} + L-BFGS ---")
         model_lbfgs = STAR_PINN(input_dim, output_dim, hidden_dim, n_layers_per_block, activation_fn)
@@ -460,7 +460,7 @@ def train_1D_fisher_kpp_STAR_PINN():
         }
         current_loss_histories.append(loss_history_lbfgs)
         print(f"L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # 4.3 Adam→L-BFGS two-stage training
         print(f"\n--- {activation_name} + Adam→L-BFGS ---")
         model_adam_lbfgs = STAR_PINN(input_dim, output_dim, hidden_dim, n_layers_per_block, activation_fn)
@@ -483,7 +483,7 @@ def train_1D_fisher_kpp_STAR_PINN():
             'u_pred': u_pred
         }
         current_loss_histories.append(loss_history_adam_lbfgs)
-        
+
         # Save the best STAR-PINN model
         save_path = os.path.join(PARAMETER_DIR, "1D_fisher_kpp_tanh_adam2lbfgs_star_pinn.pth")
         os.makedirs(PARAMETER_DIR, exist_ok=True)
@@ -494,25 +494,25 @@ def train_1D_fisher_kpp_STAR_PINN():
             'training_time': train_time,
             'activation_name': activation_name,
             'hyper_parameters': {
-                'n_layers_per_block': n_layers_per_block, 
+                'n_layers_per_block': n_layers_per_block,
                 'hidden_dim': hidden_dim,
-                'adam_epochs': adam_lbfgs_adam_epochs, 
+                'adam_epochs': adam_lbfgs_adam_epochs,
                 'lbfgs_max_iter': adam_lbfgs_lbfgs_iter
             }
         }
         torch.save(complete_save_dict, save_path)
         print(f"✅ Fisher-KPP STAR-PINN best model saved to: {save_path}")
         print(f"Adam→L-BFGS training time: {train_time:.2f}s | L2 error: {l2_err:.2e} | L∞ error: {linf_err:.2e}")
-        
+
         # Save results
         activation_loss_histories[activation_name] = current_loss_histories
         activation_results[activation_name] = current_results
         activation_training_times[activation_name] = current_training_times
-    
+
     # Visualization of results
     plot_loss_curves_by_activation(activation_loss_histories, optim_labels)
     plot_solutions_by_activation_and_optimizer(activation_results, test_data, u_exact_np, optim_labels)
-    
+
     # Print comprehensive comparison table
     print("\n" + "="*120)
     print("Fisher-KPP equation STAR-PINN training comprehensive comparison table (Activation Function × Optimizer)")
@@ -534,7 +534,7 @@ def train_1D_fisher_kpp_STAR_PINN():
                 f"{results['linf_error']:<12.2e} "
                 f"{results['final_total_loss']:<12.2e}"
             )
-    
+
     # Print best performance
     print("\n" + "="*100)
     print("Best performance of each optimizer (sorted by standard L2 error | STAR-PINN)")
