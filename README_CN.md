@@ -20,15 +20,15 @@ CGMPINN 使用高斯混合模型对 PDE 残差分布进行建模，从而估计�
 
 ## 摘要
 
-物理信息神经网络（PINNs）为求解偏微分方程（PDEs）提供了一种无网格框架，但其训练过程通常会受到梯度病态、谱偏差以及收敛困难等问题的影响，尤其是在处理强非线性、尖锐梯度或多尺度特征问题时更为明显。本文提出了课程引导高斯混合物理信息神经网络（Curriculum-Guided Gaussian Mixture Physics-Informed Neural Network, CGMPINN），将高斯混合建模与动态课程学习相结合。具体而言，CGMPINN 周期性地对 PDE 残差分布拟合高斯混合模型，以量化空间变化的学习难度；随后通过平滑的课程调度策略，将训练关注点从容易区域逐步转移到困难区域，同时利用基于精度的方差调制机制在训练早期抑制不可靠聚类的影响。该双重课程机制由共享课程参数控制，并可与自适应损失平衡结合。本文进一步给出了理论保证，包括诱导时变损失的梯度范数次线性收敛、课程加权 PDE 损失与标准 PDE 损失之间的一致等价性，以及具有显式加权偏差刻画的泛化界。六个涵盖椭圆型、抛物型、双曲型、对流主导型以及非线性反应扩散型 PDE 的基准实验表明，CGMPINN 在所有对比方法中稳定取得最低的相对 $L_2$ 误差和最大绝对误差，并在相近计算成本下，相比标准 PINN 最多降低 97.8% 的相对 $L_2$ 误差。
+物理信息神经网络（PINNs）通过在配点上最小化残差来求解偏微分方程（PDEs），但对所有残差一视同仁，常使训练在解含有陡峭层、移动锋面、逐渐变陡的界面或长时间输运时变慢或精度不足。本文提出课程引导高斯混合 PINN（CGMPINN）：周期性地对 PDE 残差的取值拟合一维高斯混合模型（GMM），并把由此得到的残差空间聚类映射回配点，作为损失权重。每个混合分量有一个难度分数（即该分量的条件均方残差）和一个精度因子；一个课程参数将关注点从容易、集中的聚类逐步转向困难的聚类。由于权重在分量内共享并归一化为单位均值，它们具有显式的上下界。我们证明了加权与标准 PDE 损失的一致可比性及近最优性保证、所得时变目标梯度范数的 $O(1/K)$ 界，以及带显式加权偏差项的 Rademacher 复杂度泛化界。在八个基准问题上（从椭圆型、抛物型问题到界面逐渐变陡的 Allen–Cahn 方程和长时间平流问题），CGMPINN 在六种对比方法中取得五次独立运行平均相对 $L_2$ 误差最低的结果，在相近训练时间下相对标准 PINN 降低 55%–98%。消融、超参数敏感性和重采样实验进一步考察了各组成部分的作用。
 
 ## 方法亮点
 
-- 使用高斯混合模型对 PDE 残差进行建模，估计区域级学习难度。
+- 使用高斯混合模型对 PDE 残差取值建模，并把残差空间的聚类映射回配点作为损失权重。
 - 通过平滑课程参数实现从简单到复杂的动态训练。
-- 使用基于精度的方差调制机制，降低训练早期不可靠聚类的影响。
+- 使用基于精度的调制机制，在训练早期侧重集中的残差聚类。
 - 可与自适应损失平衡策略结合。
-- 在六个典型 PDE 基准问题上进行实验，覆盖椭圆型、抛物型、双曲型、对流主导型和非线性反应扩散型问题。
+- 在八个典型 PDE 基准问题上进行实验，覆盖椭圆型、抛物型、双曲型、对流主导型和非线性反应扩散型问题，其中包括 Allen–Cahn 方程和长时间平流方程。
 
 ## 仓库结构
 
@@ -49,12 +49,19 @@ CGMPINN/
 |-- 1D_advection_diffusion/
 |   |-- 1D_advection_diffusion_code/
 |   `-- 1D_advection_diffusion_parameter/
-`-- 1D_fisher_kpp/
-    |-- 1D_fisher_kpp_code/
-    `-- 1D_fisher_kpp_parameter/
+|-- 1D_fisher_kpp/
+|   |-- 1D_fisher_kpp_code/
+|   `-- 1D_fisher_kpp_parameter/
+|-- 1D_allen_cahn/
+|   |-- 1D_allen_cahn_code/
+|   `-- 1D_allen_cahn_parameter/
+|-- 1D_advection_long/
+|   |-- 1D_advection_long_code/
+|   `-- 1D_advection_long_parameter/
+`-- results/
 ```
 
-每个 `*_code` 文件夹包含 CGMPINN 及对比方法的训练和绘图脚本；每个 `*_parameter` 文件夹包含已保存的模型参数。
+每个 `*_code` 文件夹包含 CGMPINN 及对比方法的训练和绘图脚本；每个 `*_parameter` 文件夹包含已保存的模型参数；`results` 文件夹包含多次独立运行的汇总表（见[结果汇总](#结果汇总)）。
 
 ## 基准问题
 
@@ -66,6 +73,8 @@ CGMPINN/
 | 1D Wave | 双曲型 | `1D_wave/` |
 | 1D Advection-Diffusion | 对流主导型 | `1D_advection_diffusion/` |
 | 1D Fisher-KPP | 非线性反应扩散型 | `1D_fisher_kpp/` |
+| 1D Allen-Cahn | 界面逐渐变陡的非线性反应扩散型 | `1D_allen_cahn/` |
+| 1D 长时间平流 | 长时间区间上的纯平流 | `1D_advection_long/` |
 
 ## 包含的方法
 
@@ -77,7 +86,7 @@ CGMPINN/
 - `lbPINN`：损失平衡 PINN。
 - `LNN-PINN`：局部自适应神经网络 PINN。
 - `STAR-PINN`：自训练自适应残差 PINN。
-- `ablation`：CGMPINN 的消融实验版本。
+- `ablation`：CGMPINN 的消融实验版本（GMMPINN、CLPINN，以及去掉精度因子的 CGMPINN）。
 
 ## 环境安装
 
@@ -137,6 +146,19 @@ python 1D_poisson_plot.py
 - 训练脚本会把训练好的 Adam→L-BFGS（Tanh）模型保存到对应的 `*_parameter` 文件夹，并覆盖其中的同名文件。
 - 绘图脚本在权重文件缺失或与模型结构不匹配时会直接报错。
 - 所有图片以 PDF（600 dpi）格式保存到 `<算例>/<算例>_picture/`，例如 `1D_heat/1D_heat_picture/1D_heat_plot_comparison_group_loss.pdf`。该文件夹会自动创建，且不纳入 git 版本管理。
+
+## 结果汇总
+
+`results/` 文件夹包含多次独立运行的汇总表（均值与样本标准差）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `main_comparison.csv` | 八个基准问题上的全部方法；`cpu_time_s` 为 `*_parameter` 中所提供参数对应运行的 CPU 训练时间 |
+| `ablation.csv` | 八个基准问题上的 GMMPINN、CLPINN、去掉精度因子的 CGMPINN 与 CGMPINN |
+| `sensitivity.csv` | 1D Poisson 与 1D Heat 上 CGMPINN 对 `G`、`k_upd`、`beta`、`c_sat` 的单因素敏感性 |
+| `resampling.csv` | 1D Poisson、1D Advection-Diffusion、1D Fisher-KPP 上固定配点与重采样内部配点的对比 |
+
+列含义：`rel_e2`（相对 $L_2$ 误差）、`e2`（$L_2$ 误差）、`e_inf`（最大绝对误差）、`e_loss`（各方法自身训练目标的最终值；不同损失加权的方法之间不可直接比较）。
 
 ## 引用
 

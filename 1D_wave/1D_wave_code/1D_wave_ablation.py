@@ -624,7 +624,7 @@ def get_script_dir(problem_name: str) -> str:
 
 
 def build_save_path(problem_name: str, activation_name: str, method_name: str) -> str:
-    suffix_map = {'GMM': 'gmmpinn', 'CL': 'clpinn', 'CGM': 'cgmpinn'}
+    suffix_map = {'GMM': 'gmmpinn', 'CL': 'clpinn', 'CGM': 'cgmpinn', 'NOPREC': 'cgmpinn_noprec'}
     filename = f"{problem_name}_{activation_name.lower()}_adam2lbfgs_{suffix_map[method_name]}.pth"
     current_script_dir = get_script_dir(problem_name)
     parameter_dir = os.path.join(current_script_dir, "..", "1D_wave_parameter")
@@ -799,12 +799,12 @@ if __name__ == "__main__":
             current_loss_histories = []
             current_results = {}
             current_training_times = []
-            for method_name in method_labels:
-                weight_strategy = method_name.lower()
+            for method_name in method_labels + ['NOPREC']:  # NOPREC: CGM without the precision factor
+                weight_strategy = 'cgm' if method_name == 'NOPREC' else method_name.lower()
                 save_path = build_save_path(problem_name, activation_name, method_name)
                 model = CGMPINN(
                     input_dim, output_dim, hidden_dim, n_layers,
-                    activation=activation_fn, use_curriculum=True, gmm_kwargs=gmm_kwargs,
+                    activation=activation_fn, use_curriculum=True, gmm_kwargs=(dict(gmm_kwargs, use_variance_factor=False) if method_name == 'NOPREC' else gmm_kwargs),
                     use_relobralo=use_relobralo_for_two_stage, relobralo_kwargs=relobralo_kwargs,
                     weight_strategy=weight_strategy
                 )
@@ -859,7 +859,7 @@ if __name__ == "__main__":
         print(f"{'Activation':<12} {'Method':<12} {'TrainTime(s)':<14} {'L2Error':<12} {'RelL2Error':<12} {'LinfError':<12} {'FinalTotalLoss':<14}")
         print("-" * 140)
         for activation_name in activations:
-            for idx, method_name in enumerate(method_labels):
+            for idx, method_name in enumerate(method_labels + ['NOPREC']):
                 results = activation_results[activation_name][method_name]
                 train_time = activation_training_times[activation_name][idx]
                 print(
