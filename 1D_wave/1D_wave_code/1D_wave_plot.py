@@ -984,7 +984,7 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
                  'r--', linewidth=2, label=f'{optim_label} Prediction', alpha=0.9)
 
         envelope = np.exp(-GAMMA * t_vals)
-        ax2.plot(t_vals, envelope, 'g-.', linewidth=2, label='Envelope: $e^{-\\gamma t}$', alpha=0.8)
+        ax2.plot(t_vals, envelope, 'g-.', linewidth=2, label='Envelope: $e^{-bt}$', alpha=0.8)
         ax2.plot(t_vals, -envelope, 'g-.', linewidth=2, alpha=0.8)
         ax2.fill_between(t_vals, -envelope, envelope, alpha=0.1, color='green')
 

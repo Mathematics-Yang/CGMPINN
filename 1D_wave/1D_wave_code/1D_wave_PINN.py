@@ -445,7 +445,7 @@ def plot_damping_effect(x_grid_flat, t_grid_flat, u_pred_results: dict, u_exact_
 
         # Plot decay envelope
         envelope = np.exp(-GAMMA * t_vals)
-        ax2.plot(t_vals, envelope, 'g-.', linewidth=2, label='Envelope: $e^{-\\gamma t}$')
+        ax2.plot(t_vals, envelope, 'g-.', linewidth=2, label='Envelope: $e^{-bt}$')
         ax2.plot(t_vals, -envelope, 'g-.', linewidth=2)
         ax2.fill_between(t_vals, -envelope, envelope, alpha=0.1, color='green')
 

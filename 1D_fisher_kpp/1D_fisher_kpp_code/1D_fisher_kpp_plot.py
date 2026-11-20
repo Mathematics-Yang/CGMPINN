@@ -1068,8 +1068,8 @@ def plot_wavefront_tracking(models_dict, threshold=0.5, n_times=50, n_x=500):
             ax2.plot(t_pr, speed_pred, '--', color=colors[idx+1], linewidth=1.5, label=name)
 
     ax2.set_xlabel('Time $t$', fontsize=12)
-    ax2.set_ylabel('Wave Speed $c$', fontsize=12)
-    ax2.set_title('Wave Speed Estimation', fontsize=13)
+    ax2.set_ylabel(r'Front Speed $c_{\mathrm{f}}$', fontsize=12)
+    ax2.set_title('Front Speed Estimation', fontsize=13)
     ax2.legend(fontsize=9)
     ax2.set_ylim(c*0.5, c*1.5)
 
@@ -1102,8 +1102,8 @@ def plot_wavefront_tracking(models_dict, threshold=0.5, n_times=50, n_x=500):
             ax3.plot(t_pr, speed_error_smooth, color=colors[idx+1], linewidth=1.5, label=name)
 
     ax3.set_xlabel('Time $t$', fontsize=12)
-    ax3.set_ylabel('Wave Speed Error (%)', fontsize=12)
-    ax3.set_title('Wave Speed Relative Error', fontsize=13)
+    ax3.set_ylabel('Front Speed Error (%)', fontsize=12)
+    ax3.set_title('Front Speed Relative Error', fontsize=13)
     ax3.legend(fontsize=9)
 
     plt.tight_layout()
@@ -1208,8 +1208,8 @@ def plot_combined_analysis_plus(loss_histories_list, models_dict, threshold=0.5,
             ax3.plot(t_pr, speed_pred, '--', color=colors[idx+1], linewidth=1.5, label=name)
 
     ax3.set_xlabel('Time $t$', fontsize=12)
-    ax3.set_ylabel('Wave Speed $c$', fontsize=12)
-    ax3.set_title('(c) Wave Speed Estimation', fontsize=13)
+    ax3.set_ylabel(r'Front Speed $c_{\mathrm{f}}$', fontsize=12)
+    ax3.set_title('(c) Front Speed Estimation', fontsize=13)
     ax3.legend(fontsize=8)
     ax3.set_ylim(c*0.5, c*1.5)
 
@@ -1225,8 +1225,8 @@ def plot_combined_analysis_plus(loss_histories_list, models_dict, threshold=0.5,
             ax4.plot(t_pr, speed_error_smooth, color=colors[idx+1], linewidth=1.5, label=name)
 
     ax4.set_xlabel('Time $t$', fontsize=12)
-    ax4.set_ylabel('Wave Speed Error (%)', fontsize=12)
-    ax4.set_title('(d) Wave Speed Relative Error', fontsize=13)
+    ax4.set_ylabel('Front Speed Error (%)', fontsize=12)
+    ax4.set_title('(d) Front Speed Relative Error', fontsize=13)
     ax4.legend(fontsize=8)
 
     plt.tight_layout()
@@ -1261,9 +1261,9 @@ def plot_reaction_diffusion_balance(model, model_name="Model", time_points=(0.5,
         residual = u_t_np - diffusion_term - reaction_term
 
         ax1 = axes[0, i] if n_times > 1 else axes[0]
-        ax1.plot(x_np, u_t_np, 'k-', linewidth=2, label=r'$\partial u/\partial t$')
-        ax1.plot(x_np, diffusion_term, 'b--', linewidth=2, label=r'$D \nabla^2 u$')
-        ax1.plot(x_np, reaction_term, 'r-.', linewidth=2, label=r'$ru(1-u)$')
+        ax1.plot(x_np, u_t_np, 'k-', linewidth=2, label=r'$u_t$')
+        ax1.plot(x_np, diffusion_term, 'b--', linewidth=2, label=r'$\nu u_{xx}$')
+        ax1.plot(x_np, reaction_term, 'r-.', linewidth=2, label=r'$q u(1-u)$')
         ax1.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
         ax1.fill_between(x_np, 0, diffusion_term, alpha=0.2, color='blue')
         ax1.fill_between(x_np, 0, reaction_term, alpha=0.2, color='red')

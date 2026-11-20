@@ -1051,7 +1051,7 @@ def plot_ade_tracking_and_balance(loss_histories_list, solution_results_list, te
         start_x = x_ex[0]
         t_theory = np.array(t_vals_list)
         x_theory = start_x + BETA * (t_theory - t_theory[0])
-        ax2.plot(t_theory, x_theory, 'b:', linewidth=2, label='Theory ($x = x_0 + \\beta t$)')
+        ax2.plot(t_theory, x_theory, 'b:', linewidth=2, label='Theory ($x = x_0 + a t$)')
 
     for idx, (name, peak_pred) in enumerate(model_peak_data.items()):
         if peak_pred:
@@ -1104,7 +1104,7 @@ def plot_ade_tracking_and_balance(loss_histories_list, solution_results_list, te
 
 
     ax4.plot(x_np, u_t_np, 'k-', linewidth=2, label=r'$\partial u/\partial t$')
-    ax4.plot(x_np, -advection_term, 'r--', linewidth=2, label=r'$-\beta \partial u/\partial x$ (Adv)')
+    ax4.plot(x_np, -advection_term, 'r--', linewidth=2, label=r'$-a \partial u/\partial x$ (Adv)')
     ax4.plot(x_np, diffusion_term, 'b-.', linewidth=2, label=r'$\nu \partial^2 u/\partial x^2$ (Diff)')
 
     ax4.fill_between(x_np, 0, -advection_term, alpha=0.1, color='red')

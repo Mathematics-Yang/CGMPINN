@@ -1065,7 +1065,7 @@ def plot_ac_tracking_and_balance(loss_histories_list, solution_results_list, tes
 
     ax4.plot(x_np, u_t_np, 'k-', linewidth=2, label=r'$\partial u/\partial t$')
     ax4.plot(x_np, source_term, 'g:', linewidth=2, label=r'$f$ (Source)')
-    ax4.plot(x_np, diffusion_term, 'b-.', linewidth=2, label=r'$D \partial^2 u/\partial x^2$ (Diff)')
+    ax4.plot(x_np, diffusion_term, 'b-.', linewidth=2, label=r'$\nu \partial^2 u/\partial x^2$ (Diff)')
     ax4.plot(x_np, reaction_term, 'r--', linewidth=2, label=r'$u - u^3$ (React)')
 
     ax4.fill_between(x_np, 0, reaction_term, alpha=0.1, color='red')
@@ -1115,7 +1115,7 @@ def plot_ac_term_balance_detailed(model, model_name="CGMPINN", time_points=(0.25
         # Rearranged for visualization: u_t = Diffusion + Reaction + Source
         ax1 = axes[0, i] if n_times > 1 else axes[0]
         ax1.plot(x_np, u_t_np, 'k-', linewidth=2, label=r'$u_t$')
-        ax1.plot(x_np, diffusion_term, 'b-.', linewidth=2, label=r'$D u_{xx}$')
+        ax1.plot(x_np, diffusion_term, 'b-.', linewidth=2, label=r'$\nu u_{xx}$')
         ax1.plot(x_np, reaction_term, 'r--', linewidth=2, label=r'$u - u^3$')
         ax1.plot(x_np, source_term, 'g:', linewidth=2, label=r'$f$')
 
